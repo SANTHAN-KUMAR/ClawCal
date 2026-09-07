@@ -1,0 +1,6 @@
+==========================================================
+ Starting FreeToken Model Gateway for GPT-OSS 20B MoE
+ Model: /run/media/santhankumar/New Volume/models/gpt-oss-20b/openai_gpt-oss-20b-MXFP4.gguf
+ MoE Backend: offload (GPU Cache + RAM Offload)
+ Endpoint: http://127.0.0.1:8080/v1
+==========================================================

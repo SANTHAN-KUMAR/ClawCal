@@ -1,0 +1,34 @@
+FROM ./openai_gpt-oss-20b-MXFP4.gguf
+
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER num_ctx 8192
+PARAMETER stop "<|return|>"
+PARAMETER stop "<|call|>"
+
+TEMPLATE """{{- if or .System .Tools }}<|start|>system<|message|>
+{{- if .System }}{{ .System }}{{ else }}You are a helpful AI assistant.{{ end }}
+{{- if .Tools }}
+
+# Tools
+
+You have access to the following tools:
+{{- range .Tools }}
+{"type": "function", "function": {{ .Function }}}
+{{- end }}
+
+When calling a function, emit:
+<|start|>assistant to=functions.<name><|channel|>commentary json<|message|>{args}<|call|>
+{{- end }}<|end|>
+{{- end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|start|>user<|message|>{{ .Content }}<|end|>
+{{- else if eq .Role "assistant" }}<|start|>assistant<|channel|>final<|message|>{{ .Content }}<|return|>
+{{- else if eq .Role "tool" }}<|start|>functions to=assistant<|channel|>commentary<|message|>{{ .Content }}<|end|>
+{{- end }}
+{{- if and (ne .Role "assistant") $last }}<|start|>assistant
+{{- end }}
+{{- end }}"""
+
+SYSTEM You are a helpful AI assistant.
