@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------- model weights
+# Never commit weights. The 20B MXFP4 GGUF alone is 12 GB; models are pulled by
+# the backend (`ollama pull ...`), which is what makes them replaceable.
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+hf_cache/
+models/
+.ollama/
+
+# ---------------------------------------------------------------- runtime state
+# The control plane keeps its database, evidence store, sandboxes, checkpoints
+# and generated deliverables outside the tree, under SOVEREIGN_DATA_DIR
+# (default ~/.sovereign). These patterns catch it if anyone repoints it inside.
+.sovereign/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Generated deliverables and per-task sandboxes
+artifacts/
+workspaces/
+checkpoints/
+evidence/
+uploads/
+
+# ---------------------------------------------------------------- python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------- logs & scratch
+*.log
+!corpus/**/*.log
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# ---------------------------------------------------------------- secrets
+.env
+.env.*
+*.pem
+*.key
+credentials.json

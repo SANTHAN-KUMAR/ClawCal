@@ -1,0 +1,38 @@
+# Sovereign On-Premise AI Workbench — Python dependencies.
+#
+# All of these install from wheels and none reach the network at runtime once
+# the embedding model is in the local cache. Pin exactly for an air-gapped
+# deployment: `pip download -r requirements.txt -d wheels/` on a connected
+# machine, then `pip install --no-index --find-links wheels/ -r requirements.txt`
+# on the appliance.
+
+# -- control plane
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+requests>=2.31
+
+# -- documents in, deliverables out
+PyMuPDF>=1.24          # PDF parsing, page rendering, vector drawing geometry
+pytesseract>=0.3.10    # thin wrapper; the tesseract binary is a system package
+Pillow>=10.2
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=0.6.23
+
+# -- knowledge plane
+sentence-transformers>=2.6   # local embeddings (all-MiniLM-L6-v2, ~90 MB)
+numpy>=1.26
+
+# -- engineering drawings
+opencv-python-headless>=4.9  # raster symbol/line extraction
+networkx>=3.2                # connectivity graph
+
+# -- tests
+pytest>=8.0
+
+# System packages required (not installable via pip):
+#   tesseract-ocr           OCR engine
+#   bubblewrap              sandbox (falls back to util-linux `unshare`)
+#   nftables                host-level default-deny egress policy
+#   ollama (or vLLM / llama.cpp)   local inference backend

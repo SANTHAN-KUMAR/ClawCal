@@ -1,0 +1,35 @@
+[Unit]
+Description=Sovereign On-Premise AI Workbench
+Documentation=file:///opt/sovereign-workbench/README.md
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=sovereign
+Group=sovereign
+WorkingDirectory=/opt/sovereign-workbench
+Environment=SOVEREIGN_DATA_DIR=/var/lib/sovereign
+Environment=SOVEREIGN_POLICY_MODE=controlled
+Environment=SOVEREIGN_HOST=127.0.0.1
+Environment=SOVEREIGN_PORT=8794
+ExecStart=/usr/bin/python3 -m sovereign.server
+Restart=on-failure
+RestartSec=5
+
+# The control plane needs no privileges beyond its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/sovereign
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Deliberately NOT RestrictAddressFamilies=none: the workbench must reach the
+# local inference backend on loopback. Egress is constrained by the nftables
+# policy in ops/egress-policy.sh and by the in-process guard, not by removing
+# sockets outright.
+
+[Install]
+WantedBy=multi-user.target

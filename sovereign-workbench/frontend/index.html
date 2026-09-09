@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sovereign On-Premise AI Workbench</title>
+<!-- Inline, so the tab icon costs no request and resolves no hostname. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0a0a'/%3E%3Crect x='11' y='11' width='10' height='10' rx='2' fill='%23fff' transform='rotate(45 16 16)'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/css/fonts.css">
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================================================================ rail -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="mark"><i></i><span id="orgName">Sovereign Workbench</span></div>
+      <span class="unit" id="orgUnit">on-premise · air-gapped</span>
+    </div>
+
+    <nav class="nav" id="tabs" aria-label="Sections">
+      <div class="nav-group">
+        <span class="nav-label">Work</span>
+        <button data-v="work" class="on">Workbench</button>
+        <button data-v="tasks">Tasks<span class="count" id="cTasks"></span></button>
+        <button data-v="approvals">Approvals<span class="count" id="cAppr"></span></button>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">Compute</span>
+        <button data-v="runtime">Resource runtime</button>
+        <button data-v="models">Models</button>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">Knowledge</span>
+        <button data-v="docs">Documents<span class="count" id="cDocs"></span></button>
+        <button data-v="drawings">Drawings<span class="count" id="cDwg"></span></button>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">Assurance</span>
+        <button data-v="evidence">Evidence</button>
+        <button data-v="deliverables">Deliverables<span class="count" id="cArt"></span></button>
+        <button data-v="sovereignty">Sovereignty<span class="count" id="cNet"></span></button>
+        <button data-v="audit">Audit</button>
+      </div>
+    </nav>
+
+    <div class="rail-foot">
+      <div class="cap">Appliance</div>
+      <div class="meter" id="mVram"><div class="lbl"><span>VRAM</span><span id="vramTxt">—</span></div>
+        <div class="bar"><i></i></div></div>
+      <div class="meter" id="mRam"><div class="lbl"><span>System RAM</span><span id="ramTxt">—</span></div>
+        <div class="bar"><i></i></div></div>
+      <div class="meter" id="mGpu"><div class="lbl"><span>GPU compute</span><span id="gpuTxt">—</span></div>
+        <div class="bar"><i></i></div></div>
+      <div class="link-state">
+        <i class="dot" id="sseDot"></i><span id="sseTxt">connecting…</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ================================================================ main -->
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">Workbench</h1>
+        <p id="viewDesc"></p>
+      </div>
+      <div class="chips">
+        <span class="chip ok" id="egressBadge">Egress default-deny</span>
+        <span class="chip" id="policyBadge">Policy <b>—</b></span>
+        <span class="chip" id="modelBadge">Resident <b>—</b></span>
+      </div>
+    </header>
+
+    <div class="scroll" id="scroll">
+    <div class="scroll-inner" id="scrollInner">
+    <main>
+
+    <!-- --------------------------------------------------------- workbench -->
+    <section class="view on split" id="v-work">
+      <div class="side">
+        <div class="panel">
+          <h2>Submit a task</h2>
+          <div class="field">
+            <label for="prompt">What should the agent do?</label>
+            <textarea id="prompt" rows="6" placeholder="Prepare an approval note for pressure vessel V-204 based on inspection report IR-2026-0731 and the applicable internal SOP."></textarea>
+          </div>
+          <div class="two-up">
+            <div class="field">
+              <label for="workflow">Workflow</label>
+              <select id="workflow"></select>
+            </div>
+            <div class="field">
+              <label for="priority">Priority</label>
+              <select id="priority">
+                <option value="">Auto — classified from the task</option>
+                <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option>
+                <option>LOW</option><option>BATCH</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Attachment</label>
+            <div class="drop" id="drop">
+              <input type="file" id="file" aria-label="Attach a document">
+              <div class="ico" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                  stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 11V3M5 6l3-3 3 3M2.5 11v1.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V11"/>
+                </svg>
+              </div>
+              <div class="txt" id="dropTxt">
+                <b>Choose a file or drop it here</b>
+                <span>Indexed automatically when you submit</span>
+              </div>
+            </div>
+            <div class="hint">Agents read indexed documents, never host paths. Attach
+              the file rather than naming its location on disk.</div>
+          </div>
+          <div class="actions" style="margin-top:20px">
+            <button class="btn primary" id="submitBtn">Submit task</button>
+            <button class="btn" id="uploadBtn">Index only</button>
+          </div>
+          <div class="msg" id="submitMsg" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="section" style="margin-top:36px">
+          <div class="section-head"><h2>Recent tasks</h2></div>
+          <ul class="list" id="recentTasks"></ul>
+        </div>
+      </div>
+
+      <div>
+        <div class="section" id="traceSection">
+          <div class="section-head">
+            <h2>Agent trace</h2>
+            <span class="aside" id="traceTitle"></span>
+          </div>
+          <div id="traceMeta"></div>
+          <ul class="trace" id="trace"></ul>
+        </div>
+
+        <div class="section" id="answerCard" hidden>
+          <div class="section-head"><h2>Result</h2></div>
+          <div class="actions" id="provSummary" style="margin-bottom:14px"></div>
+          <pre class="out" id="answer"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------- tasks -->
+    <section class="view" id="v-tasks">
+      <div class="section">
+        <div class="tw"><table>
+          <thead><tr><th>Task</th><th>Type</th><th>Priority</th><th>State</th>
+            <th>Model</th><th>Steps</th><th>Queued</th><th>Runtime</th><th></th></tr></thead>
+          <tbody id="taskRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- runtime -->
+    <section class="view" id="v-runtime">
+      <div class="cols">
+        <div class="section">
+          <div class="section-head"><h2>Running</h2></div>
+          <div class="tw"><table>
+            <thead><tr><th>Task</th><th>Priority</th><th>Model</th><th>Steps</th></tr></thead>
+            <tbody id="runRows"></tbody></table></div>
+        </div>
+        <div class="section" style="margin-top:0">
+          <div class="section-head"><h2>Queue</h2>
+            <span class="aside">effective priority after aging</span></div>
+          <div class="tw"><table>
+            <thead><tr><th>Task</th><th>Pri</th><th>Eff</th><th>Why it is waiting</th></tr></thead>
+            <tbody id="queueRows"></tbody></table></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h2>Model residency</h2></div>
+        <p class="note" id="residencyNote"></p>
+        <div id="residency"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h2>Runtime limits</h2></div>
+        <dl class="kv" id="limits"></dl>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h2>Admission decisions</h2></div>
+        <div class="tw"><table>
+          <thead><tr><th>Outcome</th><th>Task</th><th>Pri</th><th>Model</th><th>Reason</th></tr></thead>
+          <tbody id="admissionRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ models -->
+    <section class="view" id="v-models">
+      <div class="section">
+        <div class="section-head"><h2>Registry</h2></div>
+        <div class="tw"><table>
+          <thead><tr><th>Model</th><th>Role</th><th>Backend</th><th>Weights</th>
+            <th>KV / 1k</th><th>Load</th><th>Decode</th><th>Status</th><th></th></tr></thead>
+          <tbody id="modelRows"></tbody></table></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>Capabilities</h2>
+          <span class="aside">router scores, 0–1</span></div>
+        <div class="tw"><table><thead><tr id="capHead"></tr></thead>
+          <tbody id="capRows"></tbody></table></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>Hardware profile</h2></div>
+        <dl class="kv" id="hwProfile"></dl>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------------- documents -->
+    <section class="view split" id="v-docs">
+      <div class="side">
+        <div class="section-head"><h2>Indexed documents</h2></div>
+        <ul class="list" id="docList"></ul>
+      </div>
+      <div id="docDetail"></div>
+    </section>
+
+    <!-- ---------------------------------------------------------- drawings -->
+    <section class="view split" id="v-drawings">
+      <div class="side">
+        <div class="section-head"><h2>Analysed drawings</h2></div>
+        <ul class="list" id="dwgList"></ul>
+        <div class="panel" style="margin-top:28px">
+          <h2>Analyse a drawing</h2>
+          <div class="field">
+            <label for="dwgPath">Path on the appliance</label>
+            <input type="text" id="dwgPath" value="corpus/drawings/PID-204-01.pdf">
+          </div>
+          <div class="actions" style="margin-top:16px">
+            <button class="btn primary" id="dwgBtn">Analyse</button>
+          </div>
+          <div class="msg" id="dwgMsg" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+      <div id="dwgDetail"></div>
+    </section>
+
+    <!-- ---------------------------------------------------------- evidence -->
+    <section class="view" id="v-evidence">
+      <div class="section">
+        <div class="section-head"><h2>Claims and their evidence class</h2></div>
+        <div class="legend" style="margin:14px 0 22px">
+          <div><span class="cls A">A</span><div><b>Source</b>
+            <span>present in a cited document region</span></div></div>
+          <div><span class="cls B">B</span><div><b>Derived</b>
+            <span>reproducible calculation</span></div></div>
+          <div><span class="cls C">C</span><div><b>Interpretation</b>
+            <span>a judgement made from evidence</span></div></div>
+          <div><span class="cls D">D</span><div><b>Unsupported</b>
+            <span>refused rather than invented</span></div></div>
+        </div>
+        <div class="tw"><table>
+          <thead><tr><th>Class</th><th>Value</th><th>Statement</th><th>Basis</th><th>Task</th></tr></thead>
+          <tbody id="claimRows"></tbody></table></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>Calculation traces</h2></div>
+        <div class="tw"><table>
+          <thead><tr><th>ID</th><th>Quantity</th><th>Formula</th><th>Substitution</th>
+            <th>Result</th><th>Inputs verified</th></tr></thead>
+          <tbody id="calcRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------ deliverables -->
+    <section class="view" id="v-deliverables">
+      <div class="section">
+        <div class="tw"><table>
+          <thead><tr><th>File</th><th>Kind</th><th>Size</th><th>SHA-256</th><th>Task</th><th></th></tr></thead>
+          <tbody id="artRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------------- approvals -->
+    <section class="view" id="v-approvals">
+      <div class="section">
+        <div class="section-head"><h2>Awaiting a decision</h2></div>
+        <div id="pendingApprovals"></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>Decision history</h2></div>
+        <div class="tw"><table>
+          <thead><tr><th>Tool</th><th>Summary</th><th>State</th><th>Decided by</th></tr></thead>
+          <tbody id="apprRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- sovereignty -->
+    <section class="view" id="v-sovereignty">
+      <div class="section">
+        <div class="section-head"><h2>Enforcement layers</h2></div>
+        <dl class="kv" id="sovLayers"></dl>
+        <div class="actions" style="margin-top:20px">
+          <button class="btn primary" id="selftestBtn">Run sovereignty self-test</button>
+          <span class="aside" style="font-family:var(--alt);font-size:12px;color:var(--muted);max-width:52ch">
+            Deliberately attempts outbound connections from the control plane and the
+            sandbox, and records every refusal.</span>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>Network events</h2>
+          <span class="aside">attempted egress and its outcome</span></div>
+        <div class="tw"><table>
+          <thead><tr><th>Result</th><th>Destination</th><th>Port</th><th>Layer</th>
+            <th>Process</th><th>Task</th><th>Detail</th><th>When</th></tr></thead>
+          <tbody id="netRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------- audit -->
+    <section class="view" id="v-audit">
+      <div class="section">
+        <div class="section-head"><h2>Chain integrity</h2></div>
+        <div id="auditVerify"></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>Audit log</h2></div>
+        <div class="tw"><table>
+          <thead><tr><th>#</th><th>When</th><th>Category</th><th>Action</th>
+            <th>Outcome</th><th>Task</th><th>Detail</th></tr></thead>
+          <tbody id="auditRows"></tbody></table></div>
+      </div>
+    </section>
+
+    </main>
+    </div><!-- /scroll-inner -->
+    </div><!-- /scroll -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<script src="/static/vendor/lenis.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

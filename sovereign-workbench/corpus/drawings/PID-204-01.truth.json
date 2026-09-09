@@ -1,0 +1,165 @@
+{
+  "drawing": "PID-204-01",
+  "nodes": {
+    "C-201": {
+      "type": "column",
+      "bbox": [
+        60,
+        120,
+        110,
+        430
+      ]
+    },
+    "E-301": {
+      "type": "heat_exchanger",
+      "bbox": [
+        234.0,
+        124.0,
+        286.0,
+        176.0
+      ]
+    },
+    "V-204": {
+      "type": "vessel",
+      "bbox": [
+        384,
+        118,
+        596,
+        190
+      ]
+    },
+    "P-101A": {
+      "type": "pump",
+      "bbox": [
+        450.0,
+        310.0,
+        490.0,
+        350.0
+      ]
+    },
+    "P-101B": {
+      "type": "pump",
+      "bbox": [
+        450.0,
+        400.0,
+        490.0,
+        440.0
+      ]
+    },
+    "PSV-204A": {
+      "type": "relief_valve",
+      "bbox": [
+        491.0,
+        60.0,
+        509.0,
+        118.0
+      ]
+    },
+    "PI-204": {
+      "type": "instrument",
+      "bbox": [
+        585.0,
+        135.0,
+        615.0,
+        165.0
+      ]
+    },
+    "LT-204": {
+      "type": "instrument",
+      "bbox": [
+        585.0,
+        195.0,
+        615.0,
+        225.0
+      ]
+    },
+    "TI-301": {
+      "type": "instrument",
+      "bbox": [
+        285.0,
+        81.0,
+        315.0,
+        111.0
+      ]
+    },
+    "FI-101": {
+      "type": "instrument",
+      "bbox": [
+        385.0,
+        365.0,
+        415.0,
+        395.0
+      ]
+    },
+    "HV-201": {
+      "type": "valve",
+      "bbox": [
+        342.0,
+        147.0,
+        358.0,
+        161.0
+      ]
+    },
+    "HV-204": {
+      "type": "valve",
+      "bbox": [
+        462.0,
+        261.0,
+        478.0,
+        275.0
+      ]
+    }
+  },
+  "edges": [
+    {
+      "line": "L-101",
+      "from": "C-201",
+      "to": "E-301"
+    },
+    {
+      "line": "L-102",
+      "from": "E-301",
+      "to": "V-204"
+    },
+    {
+      "line": "L-103",
+      "from": "V-204",
+      "to": "P-101A"
+    },
+    {
+      "line": "L-104",
+      "from": "V-204",
+      "to": "P-101B"
+    },
+    {
+      "line": "L-105",
+      "from": "P-101A",
+      "to": "C-201"
+    },
+    {
+      "line": "R-201",
+      "from": "V-204",
+      "to": "PSV-204A",
+      "note": "relief riser from vessel top to PSV inlet"
+    }
+  ],
+  "instrument_links": [
+    {
+      "instrument": "PI-204",
+      "on": "V-204"
+    },
+    {
+      "instrument": "LT-204",
+      "on": "V-204"
+    },
+    {
+      "instrument": "TI-301",
+      "on": "E-301"
+    },
+    {
+      "instrument": "FI-101",
+      "on": "L-105"
+    }
+  ],
+  "note": "Ground truth for scoring the drawing pipeline. Synthetic."
+}
