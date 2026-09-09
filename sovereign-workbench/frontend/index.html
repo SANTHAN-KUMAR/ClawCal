@@ -87,19 +87,19 @@
             <label for="prompt">What should the agent do?</label>
             <textarea id="prompt" rows="6" placeholder="Prepare an approval note for pressure vessel V-204 based on inspection report IR-2026-0731 and the applicable internal SOP."></textarea>
           </div>
-          <div class="two-up">
-            <div class="field">
-              <label for="workflow">Workflow</label>
-              <select id="workflow"></select>
-            </div>
-            <div class="field">
-              <label for="priority">Priority</label>
-              <select id="priority">
-                <option value="">Auto — classified from the task</option>
-                <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option>
-                <option>LOW</option><option>BATCH</option>
-              </select>
-            </div>
+          <!-- Stacked, not side by side: at this column width the priority
+               labels were clipped mid-word. -->
+          <div class="field">
+            <label for="workflow">Workflow</label>
+            <select id="workflow"></select>
+          </div>
+          <div class="field">
+            <label for="priority">Priority</label>
+            <select id="priority">
+              <option value="">Auto — classified from the task</option>
+              <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option>
+              <option>LOW</option><option>BATCH</option>
+            </select>
           </div>
           <div class="field">
             <label>Attachment</label>

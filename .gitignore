@@ -7,28 +7,38 @@
 *.pt
 *.pth
 *.onnx
-hf_cache/
-models/
-.ollama/
+/hf_cache/
+/models/
+/.ollama/
 
 # ---------------------------------------------------------------- runtime state
 # The control plane keeps its database, evidence store, sandboxes, checkpoints
 # and generated deliverables outside the tree, under SOVEREIGN_DATA_DIR
 # (default ~/.sovereign). These patterns catch it if anyone repoints it inside.
-.sovereign/
-data/
+#
+# Every one of them is ANCHORED with a leading slash, and that matters: an
+# unanchored `evidence/` matches at any depth, so it silently excluded the
+# backend/sovereign/evidence/ source package and the first push produced a tree
+# that imported fine locally and failed on a fresh clone. Runtime directories
+# only ever appear at the repository root; never let these patterns roam.
+/.sovereign/
+/data/
+/artifacts/
+/workspaces/
+/checkpoints/
+/evidence/
+/uploads/
+/sovereign-workbench/data/
+/sovereign-workbench/artifacts/
+/sovereign-workbench/workspaces/
+/sovereign-workbench/checkpoints/
+/sovereign-workbench/uploads/
+
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
 *.sqlite3
-
-# Generated deliverables and per-task sandboxes
-artifacts/
-workspaces/
-checkpoints/
-evidence/
-uploads/
 
 # ---------------------------------------------------------------- python
 __pycache__/

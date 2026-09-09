@@ -576,6 +576,8 @@ td .empty, .empty.row { padding: 26px 12px; }
   .view.split.on { grid-template-columns: 1fr; gap: 36px; }
   .split > .side { position: static; }
   .topbar { padding: 20px var(--pad) 16px; }
+  /* Once the chips wrap onto their own line, pushing them right just leaves a gap. */
+  .topbar .chips { margin-left: 0; }
   .scroll-inner { padding: 26px var(--pad) 72px; }
 }
 @media (max-width: 620px) {
