@@ -870,14 +870,37 @@ const VIEWS = {
 function refreshView() { (VIEWS[state.view] || (() => { }))(); }
 
 /* ------------------------------------------------------------------- live */
+let es = null, sseTimer = null, sseWait = 1000;
+
 function connect() {
-  const es = new EventSource('/api/stream');
+  clearTimeout(sseTimer);
+  if (es) { try { es.close(); } catch (_) { } }
+  es = new EventSource('/api/stream');
+
   es.onopen = () => {
+    sseWait = 1000;
     $('#sseDot').className = 'dot on'; $('#sseTxt').textContent = 'Live';
+    /* Anything the stream raised while it was down is gone for good — it is
+       not replayed on reconnect. Re-read what is on screen rather than trust a
+       snapshot taken before the gap. */
+    loadSystem().catch(() => { });
+    refreshView();
   };
+
   es.onerror = () => {
     $('#sseDot').className = 'dot off'; $('#sseTxt').textContent = 'Reconnecting…';
+    /* EventSource retries a connection that drops mid-stream by itself, but a
+       failure at the HTTP level — which is exactly what a control-plane
+       restart looks like from the browser — closes it permanently. Rebuild it
+       ourselves, backing off so a server that stays down is not hammered.
+       Without this the dot reads "Reconnecting…" forever and every
+       stream-driven pane silently stops updating. */
+    if (es.readyState === EventSource.CLOSED) {
+      sseTimer = setTimeout(connect, sseWait);
+      sseWait = Math.min(sseWait * 2, 15000);
+    }
   };
+
   es.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'task_event' && m.task_id === state.task) loadTask();
@@ -896,6 +919,14 @@ async function tick() {
     const res = r.residency.resident.map(x => x.model).join(', ');
     $('#modelBadge').innerHTML = 'Resident <b>' + esc(res || 'none') + '</b>';
     if (['runtime', 'sovereignty', 'approvals'].includes(state.view)) refreshView();
+    /* The workbench used to redraw only when the SSE stream said so. If that
+       stream died — a control-plane restart is enough — the trace pane froze
+       on a stale snapshot with nothing to correct it: a task that finished in
+       13s still read RUNNING twenty minutes later. Poll it as well, so the
+       stream is an optimisation rather than the only path to the truth.
+       paint() diffs before touching the DOM, so an unchanged view costs
+       nothing visible. */
+    if (state.view === 'work') { loadRecent(); if (state.task) loadTask(); }
   } catch (e) { /* the control plane may be restarting */ }
 }
 
