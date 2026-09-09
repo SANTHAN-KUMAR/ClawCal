@@ -3,9 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sovereign On-Premise AI Workbench</title>
-<!-- Inline, so the tab icon costs no request and resolves no hostname. -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0a0a'/%3E%3Crect x='11' y='11' width='10' height='10' rx='2' fill='%23fff' transform='rotate(45 16 16)'/%3E%3C/svg%3E">
+<title>ClawCal — Sovereign On-Premise AI Workbench</title>
+<link rel="icon" type="image/png" href="/static/img/clawcal-mark.png">
 <link rel="stylesheet" href="/static/css/fonts.css">
 <link rel="stylesheet" href="/static/css/app.css">
 </head>
@@ -16,29 +15,36 @@
   <!-- ================================================================ rail -->
   <aside class="rail">
     <div class="brand">
-      <div class="mark"><i></i><span id="orgName">Sovereign Workbench</span></div>
-      <span class="unit" id="orgUnit">on-premise · air-gapped</span>
+      <img class="wordmark" src="/static/img/clawcal-wordmark.png"
+           alt="ClawCal" width="168" height="22" decoding="async">
+      <!-- The product is ClawCal; the organisation below is who this appliance
+           is deployed for, and still comes straight from /api/system. -->
+      <div class="deploy">
+        <b id="orgName">—</b>
+        <span id="orgUnit"></span>
+      </div>
     </div>
+
+    <button class="new-task" id="newTaskBtn">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+        stroke-width="1.7" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>
+      New task
+    </button>
 
     <nav class="nav" id="tabs" aria-label="Sections">
       <div class="nav-group">
-        <span class="nav-label">Work</span>
-        <button data-v="work" class="on">Workbench</button>
-        <button data-v="tasks">Tasks<span class="count" id="cTasks"></span></button>
-        <button data-v="approvals">Approvals<span class="count" id="cAppr"></span></button>
+        <span class="nav-label">Tasks</span>
+        <button data-v="work" class="on chat-entry">Conversation</button>
+        <ul class="thread-list" id="threadList"></ul>
       </div>
-      <div class="nav-group">
-        <span class="nav-label">Compute</span>
+      <div class="nav-group quiet">
+        <span class="nav-label">Workspace</span>
+        <button data-v="tasks">All tasks<span class="count" id="cTasks"></span></button>
+        <button data-v="approvals">Approvals<span class="count" id="cAppr"></span></button>
         <button data-v="runtime">Resource runtime</button>
         <button data-v="models">Models</button>
-      </div>
-      <div class="nav-group">
-        <span class="nav-label">Knowledge</span>
         <button data-v="docs">Documents<span class="count" id="cDocs"></span></button>
         <button data-v="drawings">Drawings<span class="count" id="cDwg"></span></button>
-      </div>
-      <div class="nav-group">
-        <span class="nav-label">Assurance</span>
         <button data-v="evidence">Evidence</button>
         <button data-v="deliverables">Deliverables<span class="count" id="cArt"></span></button>
         <button data-v="sovereignty">Sovereignty<span class="count" id="cNet"></span></button>
@@ -63,8 +69,8 @@
   <!-- ================================================================ main -->
   <div class="main">
     <header class="topbar">
-      <div>
-        <h1 id="viewTitle">Workbench</h1>
+      <div class="topbar-head">
+        <h1 id="viewTitle">Conversation</h1>
         <p id="viewDesc"></p>
       </div>
       <div class="chips">
@@ -79,75 +85,8 @@
     <main>
 
     <!-- --------------------------------------------------------- workbench -->
-    <section class="view on split" id="v-work">
-      <div class="side">
-        <div class="panel">
-          <h2>Submit a task</h2>
-          <div class="field">
-            <label for="prompt">What should the agent do?</label>
-            <textarea id="prompt" rows="6" placeholder="Prepare an approval note for pressure vessel V-204 based on inspection report IR-2026-0731 and the applicable internal SOP."></textarea>
-          </div>
-          <!-- Stacked, not side by side: at this column width the priority
-               labels were clipped mid-word. -->
-          <div class="field">
-            <label for="workflow">Workflow</label>
-            <select id="workflow"></select>
-          </div>
-          <div class="field">
-            <label for="priority">Priority</label>
-            <select id="priority">
-              <option value="">Auto — classified from the task</option>
-              <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option>
-              <option>LOW</option><option>BATCH</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Attachment</label>
-            <div class="drop" id="drop">
-              <input type="file" id="file" aria-label="Attach a document">
-              <div class="ico" aria-hidden="true">
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M8 11V3M5 6l3-3 3 3M2.5 11v1.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V11"/>
-                </svg>
-              </div>
-              <div class="txt" id="dropTxt">
-                <b>Choose a file or drop it here</b>
-                <span>Indexed automatically when you submit</span>
-              </div>
-            </div>
-            <div class="hint">Agents read indexed documents, never host paths. Attach
-              the file rather than naming its location on disk.</div>
-          </div>
-          <div class="actions" style="margin-top:20px">
-            <button class="btn primary" id="submitBtn">Submit task</button>
-            <button class="btn" id="uploadBtn">Index only</button>
-          </div>
-          <div class="msg" id="submitMsg" role="status" aria-live="polite"></div>
-        </div>
-
-        <div class="section" style="margin-top:36px">
-          <div class="section-head"><h2>Recent tasks</h2></div>
-          <ul class="list" id="recentTasks"></ul>
-        </div>
-      </div>
-
-      <div>
-        <div class="section" id="traceSection">
-          <div class="section-head">
-            <h2>Agent trace</h2>
-            <span class="aside" id="traceTitle"></span>
-          </div>
-          <div id="traceMeta"></div>
-          <ul class="trace" id="trace"></ul>
-        </div>
-
-        <div class="section" id="answerCard" hidden>
-          <div class="section-head"><h2>Result</h2></div>
-          <div class="actions" id="provSummary" style="margin-bottom:14px"></div>
-          <pre class="out" id="answer"></pre>
-        </div>
-      </div>
+    <section class="view on" id="v-work">
+      <div class="thread" id="thread"></div>
     </section>
 
     <!-- ------------------------------------------------------------- tasks -->
@@ -337,6 +276,41 @@
     </main>
     </div><!-- /scroll-inner -->
     </div><!-- /scroll -->
+
+    <!-- The composer lives outside the scroll surface so it stays put while the
+         conversation scrolls under it. Shown only on the conversation view. -->
+    <div class="composer-wrap" id="composerWrap">
+      <form class="composer" id="composer" autocomplete="off">
+        <div class="attach-chip" id="attachChip" hidden></div>
+        <textarea id="prompt" rows="1"
+          placeholder="Ask the agent to do something. Attach a document if it needs one."></textarea>
+        <div class="composer-bar">
+          <button type="button" class="icon-btn" id="attachBtn" aria-label="Attach a document"
+            title="Attach a document">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+              stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.5 4 5.2 8.3a1.7 1.7 0 0 0 2.4 2.4l4.6-4.6a3 3 0 0 0-4.2-4.2L3.2 6.6a4.3 4.3 0 0 0 6 6L13 8.9"/>
+            </svg>
+          </button>
+          <input type="file" id="file" hidden>
+          <select id="workflow" class="mini" aria-label="Workflow"></select>
+          <select id="priority" class="mini" aria-label="Priority">
+            <option value="">Auto priority</option>
+            <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option>
+            <option>LOW</option><option>BATCH</option>
+          </select>
+          <button type="button" class="btn sm" id="uploadBtn" hidden>Index only</button>
+          <span class="grow"></span>
+          <button type="submit" class="send" id="submitBtn" aria-label="Send task" title="Send">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 12.5v-9M4 7.5 8 3.5l4 4"/>
+            </svg>
+          </button>
+        </div>
+      </form>
+      <div class="msg" id="submitMsg" role="status" aria-live="polite"></div>
+    </div>
   </div><!-- /main -->
 </div><!-- /app -->
 

@@ -45,6 +45,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -83,22 +84,32 @@ a:hover { text-decoration: underline; }
 }
 
 .brand { padding: 20px 20px 16px; border-bottom: 1px solid var(--line); }
-.brand .mark {
-  display: flex; align-items: center; gap: 9px;
-  font-size: 15px; font-weight: 700; letter-spacing: -.017em; color: var(--ink);
+/* The wordmark carries the product identity, so it is the only thing here at
+   full contrast. Sized in CSS and exported at 3x, so it stays crisp on hidpi. */
+.brand .wordmark {
+  display: block; width: 168px; height: auto;
 }
-.brand .mark i {
-  width: 9px; height: 9px; border-radius: 2px; background: var(--ink);
-  flex: none; transform: rotate(45deg);
+.brand .deploy { margin-top: 13px; }
+.brand .deploy b {
+  display: block; font-size: 12px; font-weight: 600; color: var(--ink-2);
+  line-height: 1.35;
 }
-.brand .unit {
-  display: block; margin-top: 5px; padding-left: 18px;
-  font-family: var(--alt); font-size: 11.5px; color: var(--muted);
-  line-height: 1.45;
+.brand .deploy span {
+  display: block; margin-top: 1px;
+  font-family: var(--alt); font-size: 11px; color: var(--muted); line-height: 1.4;
 }
 
 /* ---- navigation ------------------------------------------------------ */
-.nav { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 12px 16px; }
+.new-task {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  margin: 14px 12px 4px; padding: 8px 12px;
+  background: var(--ink); border: 1px solid var(--ink); border-radius: var(--r);
+  color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background .13s ease;
+}
+.new-task:hover { background: #26262b; }
+
+.nav { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px 16px; }
 .nav::-webkit-scrollbar { width: 8px; }
 .nav::-webkit-scrollbar-thumb { background: #dcdce2; border-radius: 4px;
   border: 2px solid var(--surface-2); }
@@ -119,6 +130,33 @@ a:hover { text-decoration: underline; }
 }
 .nav button:hover { background: #efeff2; color: var(--ink); }
 .nav button.on { background: var(--ink); color: #fff; font-weight: 600; }
+.nav-group.quiet { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
+.nav-group.quiet button { font-size: 12.5px; font-weight: 450; color: var(--muted); padding: 5px 10px; }
+.nav-group.quiet button:hover { color: var(--ink); }
+.nav .chat-entry { display: none; }   /* the thread list below is the real entry */
+
+/* Recent conversations, the way an agent harness lists sessions. */
+.thread-list { list-style: none; margin: 2px 0 0; padding: 0; }
+.thread-list li {
+  padding: 6px 10px; margin-bottom: 1px; border-radius: var(--r);
+  font-size: 12.5px; color: var(--ink-2); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 7px;
+  transition: background .12s ease;
+}
+.thread-list li:hover { background: #efeff2; }
+.thread-list li.on { background: var(--surface-3); font-weight: 600; color: var(--ink); }
+.thread-list li i {
+  width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--faint);
+}
+.thread-list li i.RUNNING { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.thread-list li i.COMPLETED { background: var(--ok); }
+.thread-list li i.FAILED, .thread-list li i.TERMINATED { background: var(--bad); }
+.thread-list li i.QUEUED, .thread-list li i.PAUSED { background: var(--warn); }
+.thread-list li span { overflow: hidden; text-overflow: ellipsis; }
+@keyframes pulse { 50% { opacity: .3; } }
+.thread-list .none { color: var(--faint); cursor: default; font-size: 12px; }
+.thread-list .none:hover { background: none; }
 .nav button .count {
   margin-left: auto; font-family: var(--alt); font-size: 11px;
   font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums;
@@ -565,8 +603,10 @@ td .empty, .empty.row { padding: 26px 12px; }
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: 100dvh; }
   .rail { flex-direction: row; align-items: center; overflow-x: auto;
     border-right: 0; border-bottom: 1px solid var(--line); }
-  .brand { border-bottom: 0; border-right: 1px solid var(--line); padding: 14px 18px; white-space: nowrap; }
-  .brand .unit { display: none; }
+  .brand { border-bottom: 0; border-right: 1px solid var(--line);
+    padding: 14px 18px; white-space: nowrap; display: flex; align-items: center; }
+  .brand .wordmark { width: 132px; }
+  .brand .deploy { display: none; }
   .nav { display: flex; gap: 4px; padding: 10px 12px; overflow-x: auto; }
   .nav-group { display: flex; gap: 4px; }
   .nav-group + .nav-group { margin-top: 0; }
@@ -596,3 +636,227 @@ td .empty, .empty.row { padding: 26px 12px; }
 html.lenis, html.lenis body { height: auto; }
 .lenis.lenis-smooth { scroll-behavior: auto !important; }
 .lenis.lenis-stopped { overflow: hidden; }
+
+/* =====================================================================
+   Conversation — the primary surface.
+
+   An agent run is a dialogue, not a dashboard: the operator's request, what
+   the model reasoned, which tools it reached for, what came back, and the
+   answer. The control-plane detail is still there, but it is folded away
+   until asked for rather than competing with the reply.
+   ===================================================================== */
+.thread { max-width: 780px; margin: 0 auto; padding-bottom: 8px; }
+.turn + .turn { margin-top: 26px; }
+
+/* ---- the operator's message ------------------------------------------ */
+.turn.user { display: flex; justify-content: flex-end; }
+.turn.user .bubble {
+  max-width: 88%; padding: 12px 15px;
+  background: var(--surface-3); border-radius: var(--r-lg);
+  font-size: 14px; line-height: 1.55; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.turn.user .bubble .files {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px;
+  padding-top: 9px; border-top: 1px solid var(--line-2);
+}
+
+/* ---- run context: model, routing, timings — folded away by default --- */
+.runbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 14px; font-family: var(--alt); font-size: 11.5px; color: var(--muted);
+}
+.runbar .why {
+  flex-basis: 100%; margin: 2px 0 0; max-width: 74ch;
+  font-family: var(--alt); font-size: 11.5px; color: var(--muted); line-height: 1.5;
+}
+
+/* ---- disclosure primitives ------------------------------------------- */
+details.fold { margin: 10px 0; }
+details.fold > summary {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  list-style: none; user-select: none;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary .chev {
+  flex: none; color: var(--faint); transition: transform .15s ease;
+}
+details.fold[open] > summary .chev { transform: rotate(90deg); }
+
+/* ---- thinking --------------------------------------------------------- */
+details.think > summary {
+  font-family: var(--alt); font-size: 12px; color: var(--muted); padding: 2px 0;
+}
+details.think > summary:hover { color: var(--ink-2); }
+details.think .body {
+  margin: 8px 0 0 20px; padding-left: 14px; border-left: 2px solid var(--line-2);
+  font-size: 13px; line-height: 1.62; color: var(--muted);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* ---- tool call -------------------------------------------------------- */
+details.tool {
+  border: 1px solid var(--line); border-radius: var(--r); overflow: hidden;
+  background: var(--surface);
+}
+details.tool > summary { padding: 9px 12px; font-size: 12.5px; }
+details.tool > summary:hover { background: var(--surface-2); }
+details.tool .name { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+details.tool .verdict {
+  margin-left: auto; font-family: var(--alt); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .02em; color: var(--ok);
+}
+details.tool .verdict.bad { color: var(--bad); }
+details.tool .io { border-top: 1px solid var(--line); }
+details.tool .io .lab {
+  padding: 8px 12px 0; font-family: var(--alt); font-size: 10px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+}
+details.tool .io pre {
+  margin: 4px 0 0; padding: 0 12px 11px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.55; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto;
+}
+
+/* ---- a plain step (retrieval, extraction, calculation, residency) ----- */
+.step {
+  display: flex; align-items: baseline; gap: 9px; padding: 6px 0;
+  font-size: 12.5px; color: var(--ink-2);
+}
+.step .tag {
+  flex: none; font-family: var(--alt); font-size: 10px; font-weight: 600;
+  letter-spacing: .07em; text-transform: uppercase; color: var(--faint);
+  min-width: 74px;
+}
+.step .det { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+
+/* ---- alerts: refusals, denials, failures ----------------------------- */
+.alert {
+  display: flex; gap: 10px; padding: 11px 13px; border-radius: var(--r);
+  border: 1px solid #fecdd3; background: var(--bad-weak);
+  font-size: 13px; color: var(--bad); margin: 10px 0;
+}
+.alert.warn { border-color: #fde68a; background: var(--warn-weak); color: var(--warn); }
+.alert b { display: block; font-weight: 650; }
+.alert .d { color: var(--ink-2); font-size: 12.5px; margin-top: 2px; }
+
+/* ---- the answer ------------------------------------------------------- */
+.answer {
+  margin-top: 14px; font-size: 14.5px; line-height: 1.68; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.answer-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line);
+}
+
+/* ---- live run indicator ---------------------------------------------- */
+.working {
+  display: flex; align-items: center; gap: 9px; margin-top: 14px;
+  font-family: var(--alt); font-size: 12.5px; color: var(--muted);
+}
+.working i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* ---- empty conversation ---------------------------------------------- */
+.thread-empty { padding: 84px 20px; text-align: center; }
+.thread-empty h2 {
+  margin: 0 0 8px; font-size: 17px; font-weight: 650; letter-spacing: -.014em; color: var(--ink);
+}
+.thread-empty p {
+  margin: 0 auto; max-width: 46ch;
+  font-family: var(--alt); font-size: 13px; color: var(--muted); line-height: 1.6;
+}
+
+/* =====================================================================
+   Composer
+   ===================================================================== */
+.composer-wrap {
+  flex: none; padding: 12px var(--pad) 18px; background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+.composer-wrap.hide { display: none; }
+.composer {
+  max-width: 780px; margin: 0 auto; padding: 10px 12px 8px;
+  border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface);
+  transition: border-color .13s ease, box-shadow .13s ease;
+}
+.composer:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
+.composer.over { border-color: var(--accent); background: var(--accent-weak); }
+.composer textarea {
+  width: 100%; border: 0; padding: 4px 2px; background: none; resize: none;
+  font-size: 14px; line-height: 1.55; max-height: 208px; overflow-y: auto;
+}
+.composer textarea:focus { outline: none; box-shadow: none; border: 0; }
+.composer-bar { display: flex; align-items: center; gap: 7px; margin-top: 4px; }
+.composer-bar .grow { flex: 1; }
+
+.icon-btn {
+  display: grid; place-items: center; width: 28px; height: 28px; flex: none;
+  border: 0; border-radius: var(--r); background: none; color: var(--muted); cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.icon-btn:hover { background: var(--surface-3); color: var(--ink); }
+
+select.mini {
+  width: auto; padding: 4px 26px 4px 9px; border-radius: var(--r);
+  border: 1px solid transparent; background-color: transparent;
+  font-family: var(--alt); font-size: 11.5px; color: var(--muted);
+  background-position: right 8px center;
+}
+select.mini:hover { background-color: var(--surface-2); color: var(--ink-2); }
+select.mini:focus { border-color: var(--accent); box-shadow: none; }
+
+.send {
+  display: grid; place-items: center; width: 30px; height: 30px; flex: none;
+  border: 0; border-radius: var(--r); background: var(--ink); color: #fff; cursor: pointer;
+  transition: background .13s ease, opacity .13s ease;
+}
+.send:hover { background: #26262b; }
+.send:disabled { opacity: .3; cursor: not-allowed; }
+
+.attach-chip {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--surface-2); font-size: 12.5px;
+}
+.attach-chip b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-chip span { font-family: var(--alt); font-size: 11.5px; color: var(--muted); flex: none; }
+.attach-chip button {
+  margin-left: auto; flex: none; border: 0; background: none; cursor: pointer;
+  color: var(--muted); font-size: 15px; line-height: 1; padding: 2px 5px; border-radius: 4px;
+}
+.attach-chip button:hover { background: var(--surface-3); color: var(--bad); }
+
+.composer-wrap .msg { max-width: 780px; margin: 10px auto 0; }
+
+@media (max-width: 900px) {
+  .composer-wrap { padding: 10px var(--pad) 14px; }
+  .thread-empty { padding: 52px 16px; }
+}
+
+
+/* ---- rendered answer -------------------------------------------------- */
+.answer.md { white-space: normal; }
+.answer.md > :first-child { margin-top: 0; }
+.answer.md > :last-child { margin-bottom: 0; }
+.answer.md p { margin: 0 0 12px; }
+.answer.md h1, .answer.md h2, .answer.md h3 {
+  margin: 20px 0 8px; font-size: 15px; font-weight: 650; letter-spacing: -.01em;
+}
+.answer.md ul, .answer.md ol { margin: 0 0 12px; padding-left: 22px; }
+.answer.md li { margin-bottom: 5px; }
+.answer.md li > ul, .answer.md li > ol { margin: 5px 0 0; }
+.answer.md code {
+  font-family: var(--mono); font-size: .88em;
+  background: var(--surface-3); padding: 1px 5px; border-radius: 4px;
+}
+.answer.md pre {
+  margin: 0 0 12px; padding: 12px 14px; overflow-x: auto;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+}
+.answer.md pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.6; }
+.answer.md strong { font-weight: 650; color: var(--ink); }
+.answer.md hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }

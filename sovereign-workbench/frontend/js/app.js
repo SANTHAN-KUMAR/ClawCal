@@ -21,6 +21,67 @@ const ago = ts => {
   return d < 60 ? Math.round(d) + 's ago' : d < 3600 ? Math.round(d / 60) + 'm ago'
     : Math.round(d / 3600) + 'h ago';
 };
+/* A deliberately small markdown renderer for model output.
+
+   Everything is HTML-escaped FIRST and only then given structure, so nothing
+   the model emits can introduce markup -- which matters here, because that
+   text may have come from an untrusted document the agent just read. Fenced
+   code is stashed before the inline rules run so it is never reformatted.
+   No links: an air-gapped workbench has nowhere to send the operator. */
+function mdLite(src) {
+  const code = [];
+  let s = esc(String(src == null ? '' : src)).replace(/\r\n?/g, '\n');
+
+  s = s.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, body) =>
+    '@@C' + (code.push(body.replace(/\n+$/, '')) - 1) + '@@');
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[\s(])\*([^*\n]+?)\*(?=[\s.,;:)]|$)/g, '$1<em>$2</em>');
+
+  const out = [];
+  let list = null, para = [];
+  const closePara = () => {
+    if (para.length) { out.push('<p>' + para.join('<br>') + '</p>'); para = []; }
+  };
+  const closeList = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+
+  for (const raw of s.split('\n')) {
+    const line = raw.trimEnd();
+    const ph = line.trim().match(/^@@C(\d+)@@$/);
+    if (ph) {
+      closePara(); closeList();
+      out.push('<pre><code>' + code[+ph[1]] + '</code></pre>');
+      continue;
+    }
+    if (!line.trim()) { closePara(); closeList(); continue; }
+    if (/^\s*(---+|___+|\*\*\*+)\s*$/.test(line)) {
+      closePara(); closeList(); out.push('<hr>'); continue;
+    }
+
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closePara(); closeList();
+      const n = Math.min(h[1].length + 1, 4);
+      out.push('<h' + n + '>' + h[2] + '</h' + n + '>');
+      continue;
+    }
+
+    const b = line.match(/^\s*[-*•]\s+(.*)$/);
+    const n = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (b || n) {
+      closePara();
+      const want = b ? 'ul' : 'ol';
+      if (list !== want) { closeList(); out.push('<' + want + '>'); list = want; }
+      out.push('<li>' + (b || n)[1] + '</li>');
+      continue;
+    }
+    closeList();
+    para.push(line.trim());
+  }
+  closePara(); closeList();
+  return out.join('') || '<p></p>';
+}
+
 const pill = (v, cls) => `<span class="pill ${esc(cls ?? v)}">${esc(v)}</span>`;
 /* Claim values often already carry their unit ("4.0 bar"), and appending
    `unit` on top of that rendered "4.0 bar bar" in the evidence table. */
@@ -97,11 +158,17 @@ function scrollTop() {
   if (lenis) lenis.scrollTo(0, { immediate: true });
   else $('#scroll').scrollTop = 0;
 }
+function scrollBottom() {
+  const sc = $('#scroll');
+  requestAnimationFrame(() => {
+    if (lenis) lenis.scrollTo(sc.scrollHeight, { duration: .6 });
+    else sc.scrollTop = sc.scrollHeight;
+  });
+}
 
 /* --------------------------------------------------------------- sections */
 const META = {
-  work: ['Workbench',
-    'Submit work to the agent and follow every step it takes.'],
+  work: ['Conversation', ''],
   tasks: ['Tasks',
     'Every task the control plane has admitted, with the model it was routed to and why.'],
   runtime: ['Resource runtime',
@@ -134,6 +201,7 @@ $$('#tabs button').forEach(b => b.onclick = () => {
   const [t, d] = META[state.view] || ['', ''];
   $('#viewTitle').textContent = t;
   $('#viewDesc').textContent = d;
+  $('#composerWrap').classList.toggle('hide', state.view !== 'work');
   scrollTop();
   refreshView();
 });
@@ -161,7 +229,9 @@ function paintGauges(live) {
 async function loadSystem() {
   const s = await api('/api/system'); state.system = s;
   $('#orgName').textContent = s.org.name;
-  $('#orgUnit').textContent = s.org.unit + ' · sovereign on-premise workbench';
+  /* The wordmark above already says what the product is; this line is the
+     organisation the appliance is deployed for. */
+  $('#orgUnit').textContent = s.org.unit;
   $('#policyBadge').innerHTML = 'Policy <b>' + esc(s.policy_mode) + '</b>';
 
   const nft = s.sovereignty.nftables || {};
@@ -190,52 +260,63 @@ function setCount(sel, n, alert) {
   el.classList.toggle('alert', !!(alert && n));
 }
 
-/* -------------------------------------------------------------- workbench */
-function describeFile(f) {
-  const d = $('#drop'), t = $('#dropTxt');
-  d.classList.toggle('has', !!f);
-  t.innerHTML = f
-    ? `<b>${esc(f.name)}</b><span>${fmtBytes(f.size)} · indexed and attached on submit</span>`
-    : '<b>Choose a file or drop it here</b><span>Indexed automatically when you submit</span>';
-  const old = d.querySelector('.clear');
-  if (old) old.remove();
-  if (f) {
-    const btn = document.createElement('button');
-    btn.className = 'clear'; btn.type = 'button';
-    btn.setAttribute('aria-label', 'Remove attachment');
-    btn.textContent = '×';
-    btn.onclick = ev => {
-      ev.preventDefault(); ev.stopPropagation();
-      $('#file').value = ''; state.lastUpload = null;
-      describeFile(null); setMsg($('#submitMsg'), '');
-    };
-    d.appendChild(btn);
-  }
+/* -------------------------------------------------------------- composer */
+/* An agent run is a dialogue. The composer is the only way in, so it carries
+   the prompt, the attachment and the two routing controls -- and nothing else. */
+
+const CHEV = '<svg class="chev" width="11" height="11" viewBox="0 0 16 16" fill="none" '
+  + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+  + 'stroke-linejoin="round"><path d="M6 3.5 10.5 8 6 12.5"/></svg>';
+
+function autoGrow() {
+  const t = $('#prompt');
+  t.style.height = 'auto';
+  t.style.height = Math.min(t.scrollHeight, 208) + 'px';
 }
 
+function describeFile(f) {
+  const chip = $('#attachChip');
+  chip.hidden = !f;
+  $('#uploadBtn').hidden = !f;
+  if (!f) { chip.innerHTML = ''; return; }
+  chip.innerHTML = `<b>${esc(f.name)}</b><span>${fmtBytes(f.size)}</span>
+    <button type="button" aria-label="Remove attachment">&times;</button>`;
+  chip.querySelector('button').onclick = () => {
+    $('#file').value = ''; state.lastUpload = null;
+    describeFile(null); setMsg($('#submitMsg'), '');
+  };
+}
+
+$('#attachBtn').onclick = () => $('#file').click();
 $('#file').onchange = () => {
   state.lastUpload = null;
   describeFile($('#file').files[0] || null);
   setMsg($('#submitMsg'), '');
 };
 
-/* Dropping a file is the gesture operators reach for first. */
+$('#prompt').addEventListener('input', autoGrow);
+/* Enter sends, Shift+Enter breaks the line -- what anyone who has used a chat
+   interface will try first. */
+$('#prompt').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault(); $('#composer').requestSubmit();
+  }
+});
+
 (() => {
-  const d = $('#drop');
-  ['dragenter', 'dragover'].forEach(ev => d.addEventListener(ev, e => {
-    e.preventDefault(); d.classList.add('over');
+  const c = $('#composer');
+  ['dragenter', 'dragover'].forEach(ev => c.addEventListener(ev, e => {
+    e.preventDefault(); c.classList.add('over');
   }));
-  ['dragleave', 'drop'].forEach(ev => d.addEventListener(ev, e => {
-    e.preventDefault(); d.classList.remove('over');
+  ['dragleave', 'drop'].forEach(ev => c.addEventListener(ev, e => {
+    e.preventDefault(); c.classList.remove('over');
   }));
-  d.addEventListener('drop', e => {
+  c.addEventListener('drop', e => {
     const f = e.dataTransfer?.files?.[0];
     if (!f) return;
     const dt = new DataTransfer(); dt.items.add(f);
     $('#file').files = dt.files;
-    state.lastUpload = null;
-    describeFile(f);
-    setMsg($('#submitMsg'), '');
+    state.lastUpload = null; describeFile(f); setMsg($('#submitMsg'), '');
   });
 })();
 
@@ -258,20 +339,16 @@ async function uploadChosenFile() {
   };
 }
 
-$('#submitBtn').onclick = async () => {
+$('#composer').addEventListener('submit', async e => {
+  e.preventDefault();
   const prompt = $('#prompt').value.trim();
-  if (!prompt) {
-    setMsg($('#submitMsg'), 'Describe the task first.', 'err');
-    $('#prompt').focus();
-    return;
-  }
+  if (!prompt) { $('#prompt').focus(); return; }
   const btn = $('#submitBtn');
-  btn.disabled = true; btn.classList.add('busy');
+  btn.disabled = true;
   try {
     /* A file sitting in the picker is one the operator plainly intends to use.
-       Requiring a separate "Index only" click before Submit meant the file was
-       silently dropped and the agent was asked about a document it had never
-       been given. Submit indexes it first. */
+       Requiring a separate index step first meant it was silently dropped and
+       the agent was asked about a document it had never been given. */
     if (!state.lastUpload && $('#file').files[0]) {
       state.lastUpload = await uploadChosenFile();
     }
@@ -281,127 +358,193 @@ $('#submitBtn').onclick = async () => {
 
     const r = await post('/api/tasks', body);
     state.task = r.task_id;
-    setMsg($('#submitMsg'),
-      (state.lastUpload ? `Attached ${state.lastUpload.title}. ` : '')
-      + `Submitted ${r.task_id}.`
-      + (r.injection_scan?.detected
-        ? ' Note: the prompt itself contains instruction-like text, which has been recorded.'
-        : ''), 'good');
-    $('#prompt').value = '';
-    $('#file').value = '';
-    state.lastUpload = null;
-    describeFile(null);
+    setMsg($('#submitMsg'), r.injection_scan?.detected
+      ? 'Note: the prompt contains instruction-like text, which has been recorded.' : '',
+      r.injection_scan?.detected ? 'err' : '');
+    $('#prompt').value = ''; $('#file').value = '';
+    state.lastUpload = null; describeFile(null); autoGrow();
     loadTask(); loadRecent();
-  } catch (e) {
-    setMsg($('#submitMsg'), 'Error: ' + e.message, 'err');
+  } catch (err) {
+    setMsg($('#submitMsg'), 'Error: ' + err.message, 'err');
   }
-  btn.disabled = false; btn.classList.remove('busy');
-};
+  btn.disabled = false;
+});
 
 $('#uploadBtn').onclick = async () => {
-  if (!$('#file').files[0]) {
-    setMsg($('#submitMsg'), 'Choose a file first.', 'err');
-    return;
-  }
+  if (!$('#file').files[0]) return;
   const btn = $('#uploadBtn');
-  btn.disabled = true; btn.classList.add('busy');
-  try {
-    state.lastUpload = await uploadChosenFile();
-  } catch (e) {
-    setMsg($('#submitMsg'), 'Upload failed: ' + e.message, 'err');
-  }
-  btn.disabled = false; btn.classList.remove('busy');
+  btn.disabled = true;
+  try { state.lastUpload = await uploadChosenFile(); }
+  catch (e) { setMsg($('#submitMsg'), 'Upload failed: ' + e.message, 'err'); }
+  btn.disabled = false;
 };
 
+$('#newTaskBtn').onclick = () => {
+  state.task = null;
+  if (state.view !== 'work') $$('#tabs button')[0].click();
+  renderThread(null); loadRecent();
+  setMsg($('#submitMsg'), '');
+  $('#prompt').focus();
+};
+
+/* ------------------------------------------------------ conversation list */
 async function loadRecent() {
   try {
     const { tasks } = await api('/api/tasks?limit=12');
     setCount('#cTasks', tasks.length);
-    /* Open on the most recent task rather than on an empty right-hand pane. */
-    if (!state.task && tasks.length) { state.task = tasks[0].id; loadTask(); }
-    paint($('#recentTasks'), tasks.length ? tasks.map(t => `
-      <li class="sel ${t.id === state.task ? 'on' : ''}" data-id="${esc(t.id)}"
-          tabindex="0" role="button">
-        <b>${esc(t.title)}</b>
-        <span class="meta">${pill(t.state)} ${pill(t.priority)}
-          <span>${esc(t.task_type || '')}</span>
-          <span>${esc(t.selected_model || 'unrouted')}</span>
-          <span>${ago(t.created_at)}</span></span></li>`).join('')
-      : '<li class="empty">No tasks yet. Submit one to begin.</li>');
-    $$('#recentTasks .sel').forEach(li => {
-      const open = () => { state.task = li.dataset.id; loadTask(); loadRecent(); };
+    /* The rail shows the recent few; the full list is one click away under
+       Workspace. Ten workspace entries were being pushed off-screen. */
+    paint($('#threadList'), tasks.length ? tasks.slice(0, 8).map(t => `
+      <li class="${t.id === state.task ? 'on' : ''}" data-id="${esc(t.id)}"
+          title="${esc(t.title)}" tabindex="0" role="button">
+        <i class="${esc(t.state)}"></i><span>${esc(t.title)}</span></li>`).join('')
+      : '<li class="none">No tasks yet</li>');
+    $$('#threadList li[data-id]').forEach(li => {
+      const open = () => {
+        state.task = li.dataset.id;
+        if (state.view !== 'work') $$('#tabs button')[0].click();
+        loadTask(); loadRecent();
+      };
       li.onclick = open;
       li.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
     });
-  } catch (e) { fail($('#recentTasks'), e); }
+  } catch (e) { /* the rail can wait for the next tick */ }
 }
 
-async function loadTask() {
-  if (!state.task) {
-    paint($('#trace'), '<li class="empty">Select a task, or submit one, to see its trace.</li>');
-    paint($('#traceMeta'), '');
-    $('#traceTitle').textContent = '';
-    $('#answerCard').hidden = true;
+/* ------------------------------------------------------------- the thread */
+const SETUP = new Set(['submitted', 'admitted', 'residency', 'plan', 'resumed']);
+const BAD   = new Set(['failed', 'policy_denied', 'provenance_refusal',
+                       'injection_detected', 'loop_detected']);
+const WARN  = new Set(['paused', 'approval_pending', 'preempt_requested', 'sovereignty']);
+
+function toolTurn(call, obs) {
+  const name = (call.label || '').replace(/^Calling\s+/, '') || 'tool';
+  const failed = obs && /->\s*(error|failed)/i.test(obs.label || '');
+  return `<details class="fold tool">
+    <summary>${CHEV}<span class="name">${esc(name)}</span>
+      ${obs ? `<span class="verdict${failed ? ' bad' : ''}">${failed ? 'error' : 'ok'}</span>`
+            : '<span class="verdict">running…</span>'}</summary>
+    <div class="io">
+      ${call.detail ? `<div class="lab">Arguments</div><pre>${esc(call.detail)}</pre>` : ''}
+      ${obs && obs.detail ? `<div class="lab">Result</div><pre>${esc(obs.detail)}</pre>` : ''}
+    </div></details>`;
+}
+
+function renderThread(d) {
+  const el = $('#thread');
+  if (!d) {
+    paint(el, `<div class="thread-empty">
+      <h2>What should the agent work on?</h2>
+      <p>Describe the task below. Attach a document and it is indexed locally
+         before the agent is allowed to read it — everything stays on this
+         appliance.</p></div>`);
     return;
   }
-  let d;
-  try { d = await api('/api/tasks/' + state.task); }
-  catch (e) { fail($('#trace'), e); return; }
-  const t = d.task;
+  const t = d.task, ev = d.events || [];
+  const out = [];
 
-  $('#traceTitle').textContent = t.title;
-  paint($('#traceMeta'),
-    `<div class="actions" style="margin-bottom:14px">
-       ${pill(t.state)} ${pill(t.priority)}
-       <span class="chip">Model <b>${esc(t.selected_model || '—')}</b></span>
-       <span class="chip">Steps <b>${t.steps_used || 0}</b></span>
-       <span class="chip">Queued <b>${fmtSec(t.queue_wait_s)}</b></span>
-       <span class="chip">Ran <b>${fmtSec(t.runtime_s)}</b></span>
-       ${t.state === 'RUNNING' ? '<button class="btn sm" data-a="pause">Pause</button>' : ''}
-       ${t.state === 'PAUSED' ? '<button class="btn sm primary" data-a="resume">Resume</button>' : ''}
-       ${['RUNNING', 'QUEUED', 'PAUSED'].includes(t.state)
-        ? '<button class="btn sm danger" data-a="cancel">Terminate</button>' : ''}
-     </div>`
-    + (t.routing_reason ? `<p class="note" style="margin:0 0 6px"><b>Routing.</b>
-        ${esc(t.routing_reason)}</p>` : '')
-    + (t.state_reason ? `<p class="note" style="margin:0 0 6px"><b>State.</b>
-        ${esc(t.state_reason)}</p>` : ''));
-  $$('#traceMeta button').forEach(b => b.onclick = async () => {
+  /* 1. the operator's message */
+  const files = (t.attachments || []).map(a =>
+    `<span class="chip">${esc(a.title || a.doc_id)}${a.pages ? ` · ${a.pages}p` : ''}</span>`).join('');
+  out.push(`<div class="turn user"><div class="bubble">${esc(t.prompt || t.title)}
+    ${files ? `<div class="files">${files}</div>` : ''}</div></div>`);
+
+  /* 2. the agent's turn */
+  const body = [];
+
+  /* Run context: model, priority, timings. Present, but not shouting. */
+  body.push(`<div class="runbar">
+    ${pill(t.state)}
+    <span class="chip">${esc(t.selected_model || 'unrouted')}</span>
+    <span class="chip">${esc(t.priority)}</span>
+    ${t.steps_used ? `<span class="chip">${t.steps_used} steps</span>` : ''}
+    ${t.runtime_s != null ? `<span class="chip">${fmtSec(t.runtime_s)}</span>` : ''}
+    ${['RUNNING', 'QUEUED', 'PAUSED'].includes(t.state)
+      ? `<span class="grow" style="flex:1"></span>
+         ${t.state === 'RUNNING' ? '<button class="btn sm" data-a="pause">Pause</button>' : ''}
+         ${t.state === 'PAUSED' ? '<button class="btn sm primary" data-a="resume">Resume</button>' : ''}
+         <button class="btn sm danger" data-a="cancel">Stop</button>` : ''}
+    ${t.routing_reason ? `<p class="why">${esc(t.routing_reason)}</p>` : ''}
+  </div>`);
+
+  /* Setup steps are folded: interesting when diagnosing, noise when reading. */
+  const setup = ev.filter(e => SETUP.has(e.kind));
+  if (setup.length) {
+    body.push(`<details class="fold think"><summary>${CHEV}Admission and setup · ${
+      setup.length} steps</summary><div class="body">${
+      esc(setup.map(e => e.label + (e.detail ? '\n' + e.detail : '')).join('\n\n'))
+    }</div></details>`);
+  }
+
+  /* The run itself, in order. */
+  const rest = ev.filter(e => !SETUP.has(e.kind));
+  for (let i = 0; i < rest.length; i++) {
+    const e = rest[i];
+    if (e.kind === 'reasoning') {
+      body.push(`<details class="fold think"><summary>${CHEV}${esc(e.label || 'Thinking')}</summary>
+        <div class="body">${esc(e.detail || '')}</div></details>`);
+    } else if (e.kind === 'tool_call') {
+      let obs = null;
+      if (rest[i + 1] && rest[i + 1].kind === 'observation') { obs = rest[i + 1]; i++; }
+      body.push(toolTurn(e, obs));
+    } else if (e.kind === 'observation') {
+      body.push(toolTurn({ label: e.label }, e));
+    } else if (['retrieval', 'extraction', 'calculation'].includes(e.kind)) {
+      body.push(`<div class="step"><span class="tag">${esc(e.kind)}</span>
+        <span><b>${esc(e.label || '')}</b>${e.detail
+          ? `<span class="det"> ${esc(e.detail.slice(0, 240))}</span>` : ''}</span></div>`);
+    } else if (BAD.has(e.kind) || WARN.has(e.kind)) {
+      body.push(`<div class="alert${WARN.has(e.kind) ? ' warn' : ''}">
+        <div><b>${esc(e.label || e.kind.replace(/_/g, ' '))}</b>
+        ${e.detail ? `<div class="d">${esc(e.detail)}</div>` : ''}</div></div>`);
+    }
+  }
+
+  /* The answer. */
+  const res = t.result || {};
+  if (res.summary) {
+    const c = (res.provenance && res.provenance.counts) || {};
+    const chips = ['A', 'B', 'C', 'D'].filter(k => c[k])
+      .map(k => `<span class="chip"><span class="cls ${k}">${k}</span> <b>${c[k]}</b></span>`).join('');
+    const arts = (res.artifacts || []).map(a =>
+      `<a class="btn sm" href="/api/artifacts/${esc(a.id)}/download">↓ ${esc(a.name)}</a>`).join(' ');
+    body.push(`<div class="answer md">${mdLite(res.summary)}</div>`);
+    if (chips || arts || c.D) {
+      body.push(`<div class="answer-foot">${chips}${
+        c.D ? `<span class="pill DENIED">${c.D} unsupported refused</span>` : ''}${arts}</div>`);
+    }
+  } else if (['RUNNING', 'QUEUED'].includes(t.state)) {
+    body.push(`<div class="working"><i></i>${
+      t.state === 'QUEUED' ? 'Queued — waiting for capacity' : 'Working'}${
+      t.state_reason ? ' · ' + esc(t.state_reason) : ''}</div>`);
+  } else if (t.state_reason) {
+    body.push(`<div class="step"><span class="tag">state</span><span>${esc(t.state_reason)}</span></div>`);
+  }
+
+  out.push(`<div class="turn agent">${body.join('')}</div>`);
+  paint(el, out.join(''));
+
+  $$('#thread .runbar button').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try { await post(`/api/tasks/${state.task}/${b.dataset.a}`, {}); } finally { loadTask(); }
   });
-
-  paint($('#trace'), d.events.length ? d.events.map(e => {
-    const det = String(e.detail ?? '');
-    const long = det.length > 320;
-    return `<li class="${esc(e.kind)}">
-      <div class="k">${esc(e.kind.replace(/_/g, ' '))}</div>
-      <div class="lab">${esc(e.label || '')}</div>
-      ${det ? `<div class="det${long ? ' clip' : ''}">${esc(det)}</div>
-        ${long ? '<button class="more" type="button">Show more</button>' : ''}` : ''}
-    </li>`;
-  }).join('') : '<li class="empty">No trace recorded yet.</li>');
-  $$('#trace .more').forEach(b => b.onclick = () => {
-    const det = b.previousElementSibling;
-    const open = det.classList.toggle('clip') === false;
-    b.textContent = open ? 'Show less' : 'Show more';
-    scheduleResize();
-  });
-
-  const res = t.result || {};
-  if (res.summary) {
-    $('#answerCard').hidden = false;
-    $('#answer').textContent = res.summary;
-    const c = res.provenance?.counts || {};
-    paint($('#provSummary'), ['A', 'B', 'C', 'D'].map(k =>
-      `<span class="chip"><span class="cls ${k}">${k}</span> <b>${c[k] || 0}</b></span>`).join('')
-      + (c.D ? ` <span class="pill DENIED">${c.D} unsupported value(s) refused</span>` : '')
-      + (res.artifacts?.length
-        ? ' ' + res.artifacts.map(a =>
-          `<a class="btn sm" href="/api/artifacts/${esc(a.id)}/download">↓ ${esc(a.name)}</a>`).join(' ')
-        : ''));
-  } else { $('#answerCard').hidden = true; }
 }
+
+async function loadTask() {
+  if (!state.task) { renderThread(null); return; }
+  let d;
+  try { d = await api('/api/tasks/' + state.task); }
+  catch (e) { fail($('#thread'), e); return; }
+  const before = $('#thread').__html;
+  renderThread(d);
+  /* Follow a live run the way a terminal does. A finished conversation is left
+     where the operator put it, so re-polling never yanks the view. */
+  if (before !== $('#thread').__html
+      && ['RUNNING', 'QUEUED'].includes(d.task.state) && state.view === 'work') {
+    scrollBottom();
+  }
+}
+
 
 /* -------------------------------------------------------------- all tasks */
 async function viewTasks() {
@@ -934,8 +1077,8 @@ async function tick() {
   initScroll();
   const [t, d] = META.work;
   $('#viewTitle').textContent = t; $('#viewDesc').textContent = d;
-  paint($('#trace'), skeleton());
-  paint($('#recentTasks'), '<li>' + skeleton() + '</li>');
+  paint($('#thread'), skeleton());
+  autoGrow();
   try { await loadSystem(); }
   catch (e) { setMsg($('#submitMsg'), 'Control plane unreachable: ' + e.message, 'err'); }
   connect();
