@@ -179,6 +179,15 @@ labelled as interpretation, `UNRESOLVED` is reported as a gap needing a human.
 Instrument signal leads are separated from process flow, so a measurement
 connection is never reported as a pipe.
 
+**Measured on real drawings, not just ours.** On a genuine utility P&ID (King
+County WW510-P-60003) tag reading scores **F1 0.57**, against 1.00 on the
+synthetic corpus drawing — and the same drawing scores 0.27 when supplied at
+screenshot resolution instead of its native 2200 px. The binding constraint is
+scan resolution, and the pipeline says so rather than guessing. A page of tables
+that once produced 437 phantom "symbols" now produces 2. See
+[`docs/drawings-real-world.md`](docs/drawings-real-world.md) and
+`scripts/benchmark_drawings.py`.
+
 ---
 
 ## Sovereignty

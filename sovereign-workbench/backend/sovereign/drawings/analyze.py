@@ -85,6 +85,34 @@ def analyse_image(path: str | Path, *, title: str = "",
                      str(img_path), extracted, use_vlm=use_vlm, task_id=task_id)
 
 
+def _require_corroboration(symbols: list[Symbol], edges: list[Edge]
+                           ) -> tuple[list[Symbol], list[Edge], int]:
+    """Keep only raster symbols something else on the sheet agrees with.
+
+    Shape alone is a weak signal on a scan: lettering, hatching, dimension arrows
+    and scanner speckle all produce blobs that classify as valves. On a real
+    P&ID this left 107 of 119 "symbols" that were not equipment at all.
+
+    A genuine symbol is corroborated — it carries a tag, or a traced line runs
+    into it. A blob with neither is noise, and dropping it is the difference
+    between an inventory and a hallucination. Vector geometry needs none of
+    this, because there the shape came from the CAD file rather than from pixels.
+    """
+    attached: set[str] = set()
+    for e in edges:
+        attached.add(e.src)
+        attached.add(e.dst)
+
+    kept = [s for s in symbols if s.tag or s.id in attached]
+    kept_ids = {s.id for s in kept}
+    dropped = len(symbols) - len(kept)
+
+    surviving = [e for e in edges
+                 if (not e.src or e.src in kept_ids)
+                 and (not e.dst or e.dst in kept_ids)]
+    return kept, surviving, dropped
+
+
 def _assemble(did: str, title: str, source_kind: str, width: float, height: float,
               image_path: str, extracted: dict[str, Any], *, use_vlm: bool,
               task_id: str | None) -> DrawingAnalysis:
@@ -101,10 +129,41 @@ def _assemble(did: str, title: str, source_kind: str, width: float, height: floa
     edges = graph.build_edges(chains, symbols, tags, source_kind=source_kind,
                               scale=coord_scale)
 
+    if source_kind == "raster":
+        symbols, edges, dropped = _require_corroboration(symbols, edges)
+    else:
+        dropped = 0
+
     analysis = DrawingAnalysis(
         drawing_id=did, title=title, source_kind=source_kind, width=width,
         height=height, image_path=image_path, symbols=symbols, tags=tags,
         edges=edges)
+
+    if dropped:
+        analysis.notes.append(
+            f"{dropped} shape(s) were discarded as uncorroborated: nothing on the "
+            f"sheet named them and no traced line reached them")
+
+    # Reliability. A reading nobody can act on should say so in one line, not be
+    # inferred from a long list of unnamed shapes.
+    tagged = sum(1 for s in symbols if s.tag)
+    ratio = tagged / len(symbols) if symbols else 0.0
+    assessment = extracted.get("assessment") or {}
+    if source_kind == "raster" and ratio < 0.25:
+        analysis.warnings.insert(0, (
+            f"LOW CONFIDENCE READING: only {tagged} of {len(symbols)} symbols "
+            f"({ratio:.0%}) could be matched to a tag. On a scanned sheet this "
+            f"normally means the tag text is below the resolution OCR can read. "
+            f"Treat the equipment list as indicative only, and supply the plant "
+            f"tag register or the vector PDF for a usable reading."))
+    res = (assessment or {}).get("resolution") or {}
+    if res and not res.get("text_legible", True):
+        analysis.warnings.insert(0, "INSUFFICIENT SCAN RESOLUTION: " + res["advice"])
+
+    if assessment and not assessment.get("is_drawing", True):
+        analysis.warnings.insert(0, (
+            f"THIS PAGE DOES NOT APPEAR TO BE A DRAWING: "
+            f"{assessment.get('reason', '')}"))
 
     # Honest warnings. These are what an engineer needs to know before trusting it.
     untagged = [s for s in symbols if not s.tag and s.sym_class != "unknown"]

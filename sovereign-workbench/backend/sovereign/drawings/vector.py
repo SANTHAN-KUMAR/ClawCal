@@ -322,6 +322,7 @@ def _resolve_composite(members: list[dict[str, Any]]) -> tuple[str, float]:
 
 
 from .tags import TAG_IN_TEXT_RE as TAG_RE  # noqa: F401  (re-export)
+from .tags import plant_tag_lexicon
 from .tags import recognise as _recognise_tags
 
 
@@ -329,4 +330,5 @@ def _extract_tags(page: Any) -> list[TextTag]:
     """Read text with geometry and hand it to the shared tag recogniser."""
     items = [(w[4], BBox(w[0], w[1], w[2], w[3]), 0.97)
              for w in page.get_text("words")]
-    return _recognise_tags(items, id_prefix="tag")
+    return _recognise_tags(items, id_prefix="tag",
+                           lexicon=plant_tag_lexicon())

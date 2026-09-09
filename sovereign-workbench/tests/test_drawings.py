@@ -128,8 +128,12 @@ class TestTagRecognition:
         assert [t.text for t in recognise(items)] == ["V-204"]
 
     @pytest.mark.parametrize("prefix,kind", [
-        ("PI", "instrument"), ("LT", "instrument"), ("PSV", "equipment"),
-        ("V", "equipment"), ("P", "equipment"), ("L", "line"), ("ZZ", "note"),
+        ("PI", "instrument"), ("LT", "instrument"), ("AIT", "instrument"),
+        ("PSV", "equipment"), ("V", "equipment"), ("P", "equipment"),
+        ("BV", "equipment"), ("L", "line"),
+        # ISA 5.1 generates instrument prefixes up to three letters, so a
+        # four-letter run is neither equipment nor an instrument.
+        ("ZZZZ", "note"),
     ])
     def test_prefixes_are_typed(self, prefix, kind):
         assert classify_prefix(prefix) == kind
@@ -144,3 +148,100 @@ class TestSymbolGeometry:
     def test_bbox_iou(self):
         assert BBox(0, 0, 10, 10).iou(BBox(0, 0, 10, 10)) == pytest.approx(1.0)
         assert BBox(0, 0, 10, 10).iou(BBox(20, 20, 30, 30)) == 0.0
+
+
+class TestRealWorldTagReading:
+    """Regressions from real refinery and utility drawings.
+
+    Every string below is literal OCR output from the King County effluent P&ID
+    (drawing WW510-P-60003). The original pattern capped sequence numbers at four
+    digits and matched *none* of them: real plant tags encode area, unit and
+    sequence in one number, so `BV510544F` has six. Teaching examples use V-204;
+    operating plants do not.
+    """
+
+    from sovereign.drawings.tags import repair_tag, snap_reading  # noqa
+
+    OCR_TO_TRUTH = {
+        "BVS10344F": "BV-510544F", "BYS10544N": "BV-510544N",
+        "CVS10503": "CV-510503", "5VS105448": "SV-510544B",
+        "BVS10544H": "BV-510544H", "T510644": "T-510644",
+        "BVS10544E": "BV-510544E", "SVS10503": "SV-510503",
+        "PI510503B": "PI-510503B", "NVS10544A": "NV-510544A",
+        "AIT520282": "AIT-520282", "FS510504": "FS-510504",
+        "ME510503C": "ME-510503C",
+    }
+
+    def test_six_digit_plant_tags_are_matched_at_all(self):
+        from sovereign.drawings.tags import TAG_RE
+        for tag in ("BV-510544F", "AIT-520282", "SV-510503A", "PNL-520811"):
+            assert TAG_RE.match(tag), f"{tag} does not match the tag pattern"
+
+    def test_grammar_repair_recovers_most_readings_without_a_register(self):
+        from sovereign.drawings.tags import repair_tag
+        ok = sum(repair_tag(raw)[0] == truth
+                 for raw, truth in self.OCR_TO_TRUTH.items())
+        assert ok >= 11, (
+            f"only {ok}/{len(self.OCR_TO_TRUTH)} readings repaired; the "
+            f"position-aware digit/letter repair has regressed")
+
+    def test_the_plant_register_resolves_every_reading(self):
+        """The industrial answer: the plant knows its own tag list."""
+        from sovereign.drawings.tags import snap_reading
+        lex = set(self.OCR_TO_TRUTH.values())
+        ok = sum(snap_reading(raw, lex)[0] == truth
+                 for raw, truth in self.OCR_TO_TRUTH.items())
+        assert ok == len(self.OCR_TO_TRUTH), f"only {ok} snapped correctly"
+
+    def test_an_ambiguous_reading_is_left_alone(self):
+        """Returning the wrong equipment is worse than returning none."""
+        from sovereign.drawings.tags import snap_to_lexicon
+        snapped, dist = snap_to_lexicon("BV-510544X",
+                                        {"BV-510544A", "BV-510544B"})
+        assert dist == -1 and snapped == "BV-510544X"
+
+    def test_an_explicit_separator_is_honoured(self):
+        """Re-deriving the split scores `P` + 1204 over `PI` + 204."""
+        from sovereign.drawings.tags import repair_tag
+        assert repair_tag("PI-204")[0] == "PI-204"
+        assert repair_tag("P-101A")[0] == "P-101A"
+
+    def test_document_references_are_kept_out_of_the_register(self):
+        """A lexicon seeded with JULY-2026 would snap equipment onto dates."""
+        from sovereign.drawings.tags import looks_like_equipment_tag
+        for bad in ("IR-2026", "JULY-2026", "MECH-014", "YEAR-2016", "WW-510"):
+            assert not looks_like_equipment_tag(bad), bad
+        for good in ("V-204", "BV-510544F", "PSV-204A", "AIT-520282"):
+            assert looks_like_equipment_tag(good), good
+
+
+class TestPageAssessment:
+    """A page of tables produces the same primitives as a P&ID."""
+
+    def _binary(self, path):
+        import cv2
+        from sovereign.drawings.raster import _binarise
+        return _binarise(cv2.imread(str(path), cv2.IMREAD_GRAYSCALE))
+
+    def test_tabular_regions_are_located(self, corpus_dir):
+        """Title blocks and legends must be set aside, not read as equipment."""
+        from sovereign.drawings.raster import assess_page, _word_estimate
+        import cv2
+        img = cv2.imread(str(corpus_dir / "drawings/PID-204-01-scan.png"),
+                         cv2.IMREAD_GRAYSCALE)
+        a = assess_page(self._binary(corpus_dir / "drawings/PID-204-01-scan.png"),
+                        None, _word_estimate(img))
+        assert "tabular_regions" in a and "tabular_coverage" in a
+        assert a["is_drawing"], "a real drawing was refused as a table"
+
+    def test_resolution_is_reported_from_the_recogniser(self, corpus_dir):
+        """Contour-based estimates rated a smaller render as having taller text;
+        the OCR word boxes are the honest measure."""
+        from sovereign.drawings.raster import assess_resolution
+        import cv2
+        img = cv2.imread(str(corpus_dir / "drawings/PID-204-01-scan.png"),
+                         cv2.IMREAD_GRAYSCALE)
+        low = assess_resolution(img, [6.0] * 40)
+        high = assess_resolution(img, [22.0] * 40)
+        assert not low["text_legible"] and high["text_legible"]
+        assert "300 DPI" in low["advice"] and high["advice"] == ""
