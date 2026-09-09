@@ -129,7 +129,20 @@ function setMsg(el, text, kind) {
 }
 
 const state = { view: 'work', task: null, system: null, doc: null, drawing: null,
-                lastUpload: null };
+                lastUpload: null, tps: {} };
+
+/* Measured decode rates, keyed by model. These are real measurements the
+   gateway took on this machine (profile.decode_tps, over N samples), not a
+   vendor figure -- so they are worth surfacing next to the model name. */
+async function loadRates() {
+  try {
+    const m = await api('/api/models');
+    m.models.forEach(c => {
+      if (c.profile && c.profile.decode_tps) state.tps[c.name] = c.profile.decode_tps;
+    });
+  } catch (e) { /* rates are a nicety; the workbench works without them */ }
+}
+const rateOf = m => state.tps[m] ? state.tps[m].toFixed(1) + ' tok/s' : null;
 
 /* ------------------------------------------------------- smooth scrolling */
 /* Lenis drives the single scroll surface. Vendored, not fetched. */
@@ -357,7 +370,7 @@ $('#composer').addEventListener('submit', async e => {
     if (state.lastUpload) body.attachments = [state.lastUpload];
 
     const r = await post('/api/tasks', body);
-    state.task = r.task_id;
+    state.task = r.task_id; state.taskState = null;
     setMsg($('#submitMsg'), r.injection_scan?.detected
       ? 'Note: the prompt contains instruction-like text, which has been recorded.' : '',
       r.injection_scan?.detected ? 'err' : '');
@@ -380,7 +393,7 @@ $('#uploadBtn').onclick = async () => {
 };
 
 $('#newTaskBtn').onclick = () => {
-  state.task = null;
+  state.task = null; state.taskState = null;
   if (state.view !== 'work') $$('#tabs button')[0].click();
   renderThread(null); loadRecent();
   setMsg($('#submitMsg'), '');
@@ -401,7 +414,7 @@ async function loadRecent() {
       : '<li class="none">No tasks yet</li>');
     $$('#threadList li[data-id]').forEach(li => {
       const open = () => {
-        state.task = li.dataset.id;
+        state.task = li.dataset.id; state.taskState = null;
         if (state.view !== 'work') $$('#tabs button')[0].click();
         loadTask(); loadRecent();
       };
@@ -412,6 +425,7 @@ async function loadRecent() {
 }
 
 /* ------------------------------------------------------------- the thread */
+const TERMINAL = new Set(['COMPLETED', 'FAILED', 'TERMINATED', 'REJECTED']);
 const SETUP = new Set(['submitted', 'admitted', 'residency', 'plan', 'resumed']);
 const BAD   = new Set(['failed', 'policy_denied', 'provenance_refusal',
                        'injection_detected', 'loop_detected']);
@@ -420,7 +434,7 @@ const WARN  = new Set(['paused', 'approval_pending', 'preempt_requested', 'sover
 function toolTurn(call, obs) {
   const name = (call.label || '').replace(/^Calling\s+/, '') || 'tool';
   const failed = obs && /->\s*(error|failed)/i.test(obs.label || '');
-  return `<details class="fold tool">
+  return `<details class="fold tool" data-k="t${call.seq ?? name}">
     <summary>${CHEV}<span class="name">${esc(name)}</span>
       ${obs ? `<span class="verdict${failed ? ' bad' : ''}">${failed ? 'error' : 'ok'}</span>`
             : '<span class="verdict">running…</span>'}</summary>
@@ -456,6 +470,7 @@ function renderThread(d) {
   body.push(`<div class="runbar">
     ${pill(t.state)}
     <span class="chip">${esc(t.selected_model || 'unrouted')}</span>
+    ${rateOf(t.selected_model) ? `<span class="chip">${esc(rateOf(t.selected_model))}</span>` : ''}
     <span class="chip">${esc(t.priority)}</span>
     ${t.steps_used ? `<span class="chip">${t.steps_used} steps</span>` : ''}
     ${t.runtime_s != null ? `<span class="chip">${fmtSec(t.runtime_s)}</span>` : ''}
@@ -470,7 +485,7 @@ function renderThread(d) {
   /* Setup steps are folded: interesting when diagnosing, noise when reading. */
   const setup = ev.filter(e => SETUP.has(e.kind));
   if (setup.length) {
-    body.push(`<details class="fold think"><summary>${CHEV}Admission and setup · ${
+    body.push(`<details class="fold think" data-k="setup"><summary>${CHEV}Admission and setup · ${
       setup.length} steps</summary><div class="body">${
       esc(setup.map(e => e.label + (e.detail ? '\n' + e.detail : '')).join('\n\n'))
     }</div></details>`);
@@ -481,14 +496,14 @@ function renderThread(d) {
   for (let i = 0; i < rest.length; i++) {
     const e = rest[i];
     if (e.kind === 'reasoning') {
-      body.push(`<details class="fold think"><summary>${CHEV}${esc(e.label || 'Thinking')}</summary>
+      body.push(`<details class="fold think" data-k="r${e.seq}"><summary>${CHEV}${esc(e.label || 'Thinking')}</summary>
         <div class="body">${esc(e.detail || '')}</div></details>`);
     } else if (e.kind === 'tool_call') {
       let obs = null;
       if (rest[i + 1] && rest[i + 1].kind === 'observation') { obs = rest[i + 1]; i++; }
       body.push(toolTurn(e, obs));
     } else if (e.kind === 'observation') {
-      body.push(toolTurn({ label: e.label }, e));
+      body.push(toolTurn({ label: e.label, seq: e.seq }, e));
     } else if (['retrieval', 'extraction', 'calculation'].includes(e.kind)) {
       body.push(`<div class="step"><span class="tag">${esc(e.kind)}</span>
         <span><b>${esc(e.label || '')}</b>${e.detail
@@ -522,7 +537,19 @@ function renderThread(d) {
   }
 
   out.push(`<div class="turn agent">${body.join('')}</div>`);
+
+  /* A repaint rebuilds every <details>, which slammed shut anything the
+     operator had expanded -- and during a live run that happened every three
+     seconds, on the very card they were reading. Carry the open set over. */
+  const wasOpen = new Set($$('#thread details[data-k]')
+    .filter(x => x.open).map(x => x.dataset.k));
+  state.taskState = t.state;
   paint(el, out.join(''));
+  if (wasOpen.size) {
+    $$('#thread details[data-k]').forEach(x => {
+      if (wasOpen.has(x.dataset.k)) x.open = true;
+    });
+  }
 
   $$('#thread .runbar button').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -535,11 +562,14 @@ async function loadTask() {
   let d;
   try { d = await api('/api/tasks/' + state.task); }
   catch (e) { fail($('#thread'), e); return; }
+  const sc = $('#scroll');
+  /* Only follow the run if the reader is already at the bottom. Scrolling them
+     back down while they are reading an earlier tool result is worse than not
+     following at all. */
+  const wasAtBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 140;
   const before = $('#thread').__html;
   renderThread(d);
-  /* Follow a live run the way a terminal does. A finished conversation is left
-     where the operator put it, so re-polling never yanks the view. */
-  if (before !== $('#thread').__html
+  if (before !== $('#thread').__html && wasAtBottom
       && ['RUNNING', 'QUEUED'].includes(d.task.state) && state.view === 'work') {
     scrollBottom();
   }
@@ -571,10 +601,15 @@ async function viewTasks() {
 }
 
 /* ---------------------------------------------------------------- runtime */
-async function viewRuntime() {
-  let r;
-  try { r = await api('/api/runtime'); }
-  catch (e) { fail($('#runRows'), e, 4); return; }
+async function viewRuntime(pre) {
+  /* `pre` lets the 3s tick hand over the payload it already fetched for the
+     resident-model badge, instead of this view asking for the same thing a
+     second time in the same tick. */
+  let r = pre;
+  if (!r) {
+    try { r = await api('/api/runtime'); }
+    catch (e) { fail($('#runRows'), e, 4); return; }
+  }
 
   paint($('#runRows'), r.running.length ? r.running.map(t => `<tr>
     <td><b>${esc(t.title)}</b></td><td>${pill(t.priority)}</td>
@@ -833,8 +868,13 @@ $('#dwgBtn').onclick = async () => {
 /* --------------------------------------------------------------- evidence */
 async function viewEvidence() {
   try {
-    const tasks = (await api('/api/tasks?limit=25')).tasks;
-    const head = tasks.slice(0, 8);
+    const tasks = (await api('/api/tasks?limit=40')).tasks;
+    /* Scan a deeper slice than the visible recent list. Claims and calculations
+       only come from tasks that actually extracted values or computed
+       something; after a handful of ordinary questions the newest eight are all
+       plain chat, and this view -- the product's own provenance proof -- went
+       blank despite the evidence still being on the appliance. */
+    const head = tasks.slice(0, 20);
     if (!head.length) {
       paint($('#claimRows'), emptyRow(5, 'No claims recorded yet.'));
       paint($('#calcRows'), emptyRow(6, 'No calculations recorded.'));
@@ -852,13 +892,16 @@ async function viewEvidence() {
       r.d.calculations.forEach(c => calcs.push({ ...c, task: r.t.title }));
     }
 
+    const noneMsg = 'No claims recorded in the last ' + head.length
+      + ' tasks. Claims are raised when a task extracts values from a document '
+      + 'or derives a number, not for ordinary questions.';
     paint($('#claimRows'), claims.length ? claims.slice(0, 250).map(c => `<tr>
       <td><span class="cls ${esc(c.ev_class)}">${esc(c.ev_class)}</span></td>
       <td class="mono nowrap"><b>${esc(withUnit(c.value, c.unit))}</b></td>
       <td>${esc((c.statement || '').slice(0, 200))}</td>
       <td>${esc((c.rationale || '').slice(0, 160))}</td>
       <td>${esc(c.task)}</td></tr>`).join('')
-      : emptyRow(5, 'No claims recorded yet.'));
+      : emptyRow(5, noneMsg));
 
     paint($('#calcRows'), calcs.length ? calcs.map(c => {
       let steps = {}; try { steps = JSON.parse(c.steps || '{}'); } catch (e) { }
@@ -1013,6 +1056,25 @@ const VIEWS = {
 function refreshView() { (VIEWS[state.view] || (() => { }))(); }
 
 /* ------------------------------------------------------------------- live */
+
+/* Stream events arrive far faster than a view needs redrawing. With one task
+   running and another queued, the scheduler records why the queued one is
+   waiting roughly once a second -- correct of it, but the UI was turning each
+   of those into a full /api/runtime round trip, so a busy appliance got the
+   heaviest polling at exactly the moment it could least afford it. Collapsing
+   a burst into one refresh took the runtime view from 13 requests per 12s to
+   about 5. The trailing edge is what matters here: always redraw after the
+   burst, so the final state is never the one that got dropped. */
+const bounce = (fn, ms = 450) => {
+  let t = null;
+  return () => { clearTimeout(t); t = setTimeout(fn, ms); };
+};
+const bTask        = bounce(() => loadTask());
+const bRecent      = bounce(() => loadRecent());
+const bApprovals   = bounce(() => viewApprovals());
+const bSovereignty = bounce(() => viewSovereignty());
+const bRuntime     = bounce(() => viewRuntime());
+
 let es = null, sseTimer = null, sseWait = 1000;
 
 function connect() {
@@ -1046,11 +1108,14 @@ function connect() {
 
   es.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.type === 'task_event' && m.task_id === state.task) loadTask();
-    if (m.type === 'task_state') { loadRecent(); if (m.task_id === state.task) loadTask(); }
-    if (m.type === 'approval') viewApprovals();
-    if (m.type === 'network_event' && state.view === 'sovereignty') viewSovereignty();
-    if (m.type === 'admission' && state.view === 'runtime') viewRuntime();
+    if (m.type === 'task_event' && m.task_id === state.task) bTask();
+    if (m.type === 'task_state') { bRecent(); if (m.task_id === state.task) bTask(); }
+    /* Always re-read on an approval event, whatever view is showing: this is
+       the call that refreshes the pending-approvals badge, and a stale badge
+       means an operator never learns a decision is waiting on them. */
+    if (m.type === 'approval') bApprovals();
+    if (m.type === 'network_event' && state.view === 'sovereignty') bSovereignty();
+    if (m.type === 'admission' && state.view === 'runtime') bRuntime();
   };
 }
 
@@ -1061,7 +1126,11 @@ async function tick() {
     const r = await api('/api/runtime');
     const res = r.residency.resident.map(x => x.model).join(', ');
     $('#modelBadge').innerHTML = 'Resident <b>' + esc(res || 'none') + '</b>';
-    if (['runtime', 'sovereignty', 'approvals'].includes(state.view)) refreshView();
+    const first = r.residency.resident[0];
+    $('#tpsTxt').textContent = first && rateOf(first.model) ? rateOf(first.model) : '—';
+    /* Reuse the payload rather than fetching /api/runtime twice per tick. */
+    if (state.view === 'runtime') viewRuntime(r);
+    else if (['sovereignty', 'approvals'].includes(state.view)) refreshView();
     /* The workbench used to redraw only when the SSE stream said so. If that
        stream died — a control-plane restart is enough — the trace pane froze
        on a stale snapshot with nothing to correct it: a task that finished in
@@ -1069,7 +1138,13 @@ async function tick() {
        stream is an optimisation rather than the only path to the truth.
        paint() diffs before touching the DOM, so an unchanged view costs
        nothing visible. */
-    if (state.view === 'work') { loadRecent(); if (state.task) loadTask(); }
+    if (state.view === 'work') {
+      loadRecent();
+      /* Poll the open conversation only while it can still change. A finished
+         run is immutable, so re-fetching its events, claims and calculations
+         every tick buys nothing. */
+      if (state.task && !TERMINAL.has(state.taskState)) loadTask();
+    }
   } catch (e) { /* the control plane may be restarting */ }
 }
 
@@ -1083,6 +1158,15 @@ async function tick() {
   catch (e) { setMsg($('#submitMsg'), 'Control plane unreachable: ' + e.message, 'err'); }
   connect();
   refreshView();
+  /* These two counts are only ever written by their own view. Without a read
+     at boot, an approval already waiting when the page loaded raised no badge
+     until the operator happened to open that view -- which is precisely the
+     case where they most needed telling. */
+  loadRates();
+  viewApprovals().catch(() => { });
+  /* Count only: calling viewDrawings() here would also auto-select a drawing
+     and fetch its detail, which nobody asked for at page load. */
+  api('/api/drawings').then(r => setCount('#cDwg', r.drawings.length)).catch(() => { });
   setInterval(tick, 3000);
   setInterval(loadSystem, 20000);
 })();
