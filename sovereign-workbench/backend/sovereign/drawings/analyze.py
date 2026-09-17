@@ -65,6 +65,63 @@ def analyse_pdf(path: str | Path, *, page_no: int = 1, title: str = "",
                      str(img_path), extracted, use_vlm=use_vlm, task_id=task_id)
 
 
+def analyse_cad(path: str | Path, *, title: str = "",
+                drawing_id: str | None = None, use_vlm: bool = False,
+                task_id: str | None = None) -> DrawingAnalysis:
+    """Analyse a DXF or DWG natively.
+
+    No OCR, no shape classification and no resolution floor: the symbol types
+    come from block names and the tags from text entities, both of which the
+    engineer authored. This is the path a plant should be using.
+    """
+    from . import cad
+
+    path = Path(path)
+    did = drawing_id or db.new_id("dwg")
+    extracted = cad.extract(path)
+
+    # Render a preview so the workbench can still overlay the result. The DXF
+    # has no page raster of its own, so one is drawn from its geometry.
+    out_dir = EVIDENCE_DIR / did
+    out_dir.mkdir(parents=True, exist_ok=True)
+    img_path = out_dir / "drawing.png"
+    box = extracted["page_box"]
+    try:
+        _render_cad_preview(extracted, img_path)
+    except Exception:
+        img_path = Path("")
+
+    return _assemble(did, title or path.stem, "cad", box.w or 1.0, box.h or 1.0,
+                     str(img_path), extracted, use_vlm=False, task_id=task_id)
+
+
+def _render_cad_preview(extracted: dict[str, Any], out: Path,
+                        max_px: int = 2000) -> None:
+    """Draw the CAD geometry to a PNG so the evidence view has something to show."""
+    from PIL import Image, ImageDraw
+
+    box = extracted["page_box"]
+    w, h = max(box.w, 1.0), max(box.h, 1.0)
+    scale = min(max_px / w, max_px / h)
+    img = Image.new("RGB", (max(1, int(w * scale)), max(1, int(h * scale))),
+                    "white")
+    d = ImageDraw.Draw(img)
+
+    def to_px(x: float, y: float) -> tuple[float, float]:
+        # DXF y grows upward; images grow downward.
+        return ((x - box.x0) * scale, (box.y1 - y) * scale)
+
+    for pl in extracted["lines"]:
+        pts = [to_px(x, y) for x, y in pl.points]
+        if len(pts) >= 2:
+            d.line(pts, fill=(90, 90, 90) if pl.dashed else (20, 20, 20), width=1)
+    for s in extracted["symbols"]:
+        x0, y0 = to_px(s.bbox.x0, s.bbox.y1)
+        x1, y1 = to_px(s.bbox.x1, s.bbox.y0)
+        d.rectangle([x0, y0, x1, y1], outline=(30, 90, 200))
+    img.save(out)
+
+
 def analyse_image(path: str | Path, *, title: str = "",
                   drawing_id: str | None = None, use_vlm: bool = True,
                   task_id: str | None = None) -> DrawingAnalysis:

@@ -240,19 +240,40 @@ def status() -> dict[str, Any]:
 
 
 def nftables_status() -> dict[str, Any]:
-    """Report whether the host-level default-deny table is loaded (layer 4)."""
+    """Report whether the host-level default-deny table is loaded (layer 4).
+
+    Listing an nftables table needs CAP_NET_ADMIN, which this process does not
+    have and should not want. An unprivileged read therefore cannot distinguish
+    "the table is absent" from "I was not allowed to look" — and reporting the
+    second as the first told operators that a live containment control was
+    missing. The three states are kept apart instead: a security readout that
+    quietly downgrades to a guess is worse than one that admits what it cannot
+    see.
+    """
+    import os
     import shutil
     import subprocess
     if not shutil.which("nft"):
-        return {"available": False, "detail": "nft binary not present"}
+        return {"available": False, "loaded": None,
+                "detail": "nft binary not present"}
     try:
         r = subprocess.run(["nft", "list", "table", "inet",
                             settings.sovereignty.nft_table],
                            capture_output=True, text=True, timeout=6)
     except Exception as exc:
-        return {"available": True, "loaded": False, "detail": str(exc)[:200]}
-    if r.returncode != 0:
-        return {"available": True, "loaded": False,
-                "detail": "table not loaded (run ops/egress-policy.sh as root)"}
-    return {"available": True, "loaded": True,
-            "rules": r.stdout.strip().splitlines()[:40]}
+        return {"available": True, "loaded": None, "detail": str(exc)[:200]}
+
+    if r.returncode == 0:
+        return {"available": True, "loaded": True,
+                "detail": "host default-deny table is loaded",
+                "rules": r.stdout.strip().splitlines()[:40]}
+
+    err = (r.stderr or "").lower()
+    denied = ("permission denied" in err or "not permitted" in err
+              or "operation not supported" in err)
+    if denied and os.geteuid() != 0:
+        return {"available": True, "loaded": None,
+                "detail": ("cannot read the ruleset without privilege; check "
+                           "with: sudo ops/egress-policy.sh status")}
+    return {"available": True, "loaded": False,
+            "detail": "table not loaded (run ops/egress-policy.sh as root)"}

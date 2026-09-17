@@ -6,14 +6,21 @@
 # logged with the prefix SOVEREIGN-EGRESS-DENY, which the workbench surfaces on
 # its Sovereignty view alongside the application-level denial record.
 #
-# This is layer 1 of five. The others (application guard, tool policy, sandbox
+# This is layer 4 of five. The others (tool policy, application guard, sandbox
 # network namespace, audit) work without it — the workbench is fully functional
 # and still refuses egress if this is never run — but the host firewall is what
 # makes the refusal true for processes the control plane does not own.
 #
-#   sudo ./ops/egress-policy.sh apply
+# An nftables ruleset lives in kernel memory and does not survive a reboot. On
+# an appliance that claims containment, a control that quietly disappears at the
+# next power cycle is the worst kind, so `persist` installs a systemd unit that
+# reloads it at boot.
+#
+#   sudo ./ops/egress-policy.sh apply      load it now
+#   sudo ./ops/egress-policy.sh persist    load it now, and at every boot
 #   sudo ./ops/egress-policy.sh status
 #   sudo ./ops/egress-policy.sh remove
+#   sudo ./ops/egress-policy.sh unpersist  stop reloading it at boot
 set -euo pipefail
 
 TABLE="sovereign"

@@ -1170,3 +1170,202 @@ async function tick() {
   setInterval(tick, 3000);
   setInterval(loadSystem, 20000);
 })();
+
+/* ---------------------------------------------------------------- offload
+   Routing charges every candidate the measured cost of becoming resident, so a
+   model already in VRAM carries a standing advantage. That is the right default
+   for throughput and the wrong one the moment an operator has decided the next
+   task needs a different model — so they need a way to clear the board.
+
+   Appended as a self-contained block that injects its own control, rather than
+   edited into the sidebar markup, so it cannot collide with concurrent work on
+   the interface. */
+(function offloadControl() {
+  const foot = document.querySelector('.rail-foot');
+  if (!foot || document.getElementById('offloadBtn')) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'offload-wrap';
+  wrap.innerHTML = `
+    <button id="offloadBtn" class="offload-btn" type="button"
+            title="Unload every model from VRAM so the next task routes on merit">
+      Offload models
+    </button>
+    <div id="offloadMsg" class="offload-msg"></div>`;
+  foot.appendChild(wrap);
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .offload-wrap { margin-top: 10px; }
+    .offload-btn {
+      width: 100%; padding: 7px 10px; cursor: pointer;
+      font: inherit; font-size: 12px; border-radius: 8px;
+      border: 1px solid currentColor; background: transparent;
+      color: inherit; opacity: .75;
+    }
+    .offload-btn:hover:not(:disabled) { opacity: 1; }
+    .offload-btn:disabled { opacity: .4; cursor: progress; }
+    .offload-msg { font-size: 11px; opacity: .7; margin-top: 5px;
+                   min-height: 1em; line-height: 1.35; }`;
+  document.head.appendChild(style);
+
+  const btn = document.getElementById('offloadBtn');
+  const msg = document.getElementById('offloadMsg');
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Offloading…';
+    msg.textContent = '';
+    try {
+      const r = await fetch('/api/models/evict-all', { method: 'POST' });
+      if (!r.ok) throw new Error((await r.text()).slice(0, 140));
+      const d = await r.json();
+      const freed = Math.round(d.residency?.free_vram_mb ?? 0);
+      msg.textContent = d.evicted?.length
+        ? `Unloaded ${d.evicted.join(', ')} — ${freed} MB VRAM free`
+        : `Nothing was resident — ${freed} MB VRAM free`;
+    } catch (e) {
+      msg.textContent = 'Offload failed: ' + e.message;
+    }
+    btn.textContent = label;
+    btn.disabled = false;
+  };
+})();
+
+/* --------------------------------------------------- conversation threading
+   The backend has threaded turns since the scheduler learned `conversation_id`:
+   a follow-up carrying one replays the prior turns and inherits the earlier
+   attachments. The composer never sent it, so every message opened a fresh
+   thread and the agent had no memory of the file that had just been uploaded.
+
+   This block closes that gap from the outside — it wraps fetch rather than
+   editing the submit handler — so it stays out of the way of concurrent work
+   on the interface. It also surfaces what the context budget is doing, which
+   is otherwise invisible until the agent starts forgetting things. */
+(function conversationThreading() {
+  const nativeFetch = window.fetch.bind(window);
+
+  /* The thread the composer is currently continuing. Null means "the next
+     message starts a new one", which is what New task resets it to. */
+  let conversation = null;
+  let turns = 0;
+
+  const asUrl = input =>
+    typeof input === 'string' ? input
+      : (input && typeof input.url === 'string') ? input.url : '';
+
+  /* Exactly the create endpoint — not /api/tasks/<id>/pause, not the list. */
+  const isCreate = (url, init) =>
+    ((init && init.method) || 'GET').toUpperCase() === 'POST'
+    && /\/api\/tasks(?:\?|$)/.test(url);
+
+  const isTaskRead = url => /\/api\/tasks\/[^/?]+$/.test(url);
+
+  window.fetch = async function (input, init) {
+    const url = asUrl(input);
+    let opts = init;
+
+    if (conversation && isCreate(url, opts) && typeof opts.body === 'string') {
+      try {
+        const body = JSON.parse(opts.body);
+        if (!body.conversation_id) {
+          body.conversation_id = conversation;
+          opts = Object.assign({}, opts, { body: JSON.stringify(body) });
+        }
+      } catch (_) { /* not JSON — leave it exactly as it was */ }
+    }
+
+    const res = await nativeFetch(input, opts);
+
+    /* Learn the thread id from whatever comes back, on a clone, so the
+       caller still gets an unread body. */
+    if (res.ok && (isCreate(url, opts) || isTaskRead(url))) {
+      res.clone().json().then(d => {
+        const t = (d && d.task) || d || {};
+        if (t.conversation_id && t.conversation_id !== conversation) {
+          conversation = t.conversation_id;
+          countTurns();
+        }
+        if (d && d.task) paintContext(d.task);
+      }).catch(() => { /* not a JSON body we understand */ });
+    }
+    return res;
+  };
+
+  async function countTurns() {
+    if (!conversation) { turns = 0; return; }
+    try {
+      const r = await nativeFetch('/api/conversations/' + encodeURIComponent(conversation));
+      if (!r.ok) return;
+      turns = ((await r.json()).turns || []).length;
+      paintThread();
+    } catch (_) { /* the indicator can wait for the next turn */ }
+  }
+
+  /* ---------------------------------------------------------------- the UI */
+  const bar = document.querySelector('.composer-bar');
+  const anchor = bar && bar.querySelector('.grow');
+  let ctxPill = null, threadPill = null;
+
+  if (bar) {
+    const style = document.createElement('style');
+    style.textContent = `
+      .ctx-pill, .thread-pill {
+        font-size: 11px; line-height: 1; padding: 5px 8px; border-radius: 999px;
+        border: 1px solid currentColor; opacity: .55; white-space: nowrap;
+        align-self: center; cursor: default; }
+      .ctx-pill[data-low="1"] { opacity: .95; font-weight: 600; }
+      .thread-pill { opacity: .45; }`;
+    document.head.appendChild(style);
+
+    threadPill = document.createElement('span');
+    threadPill.className = 'thread-pill';
+    threadPill.id = 'threadPill';
+    threadPill.hidden = true;
+
+    ctxPill = document.createElement('span');
+    ctxPill.className = 'ctx-pill';
+    ctxPill.id = 'ctxPill';
+    ctxPill.hidden = true;
+
+    bar.insertBefore(threadPill, anchor || null);
+    bar.insertBefore(ctxPill, anchor || null);
+  }
+
+  function paintThread() {
+    if (!threadPill) return;
+    if (!conversation || turns < 1) { threadPill.hidden = true; return; }
+    threadPill.hidden = false;
+    threadPill.textContent = turns === 1 ? 'new thread' : `turn ${turns + 1}`;
+    threadPill.title = turns === 1
+      ? 'Your next message continues this thread — the agent will see this turn '
+        + 'and keep the attached documents.'
+      : `Continuing a thread of ${turns} turns. History and attachments carry over.`;
+  }
+
+  function paintContext(t) {
+    if (!ctxPill) return;
+    const budget = Number(t.context_budget_tokens || 0);
+    const used = Number(t.context_used_tokens || 0);
+    if (!budget || !used) { ctxPill.hidden = true; return; }
+    const left = Math.max(0, Math.min(100, Math.round(100 - (used / budget) * 100)));
+    const compacted = Number(t.compacted_messages || 0);
+    ctxPill.hidden = false;
+    ctxPill.dataset.low = left <= 20 ? '1' : '';
+    ctxPill.textContent = `${left}% context`
+      + (compacted ? ` · ${compacted} compacted` : '');
+    ctxPill.title = `${used.toLocaleString()} of ${budget.toLocaleString()} tokens `
+      + `used by ${t.selected_model || 'the model'}`
+      + (compacted
+        ? `\n${compacted} earlier message(s) were summarised to stay inside the budget.`
+        : '\nOlder tool output is summarised automatically when this runs out.');
+  }
+
+  const newBtn = document.getElementById('newTaskBtn');
+  if (newBtn) newBtn.addEventListener('click', () => {
+    conversation = null; turns = 0;
+    paintThread();
+    if (ctxPill) ctxPill.hidden = true;
+  });
+})();

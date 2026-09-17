@@ -129,6 +129,43 @@ TASK_TYPES: dict[str, TaskProfile] = {
     ),
 }
 
+# An operator naming a model in the request is an instruction, not a hint. Asked
+# to "use gpt oss for reasoning", the router previously ignored it and served the
+# resident model instead — which reads as the system disregarding a direct order.
+_MODEL_REQUEST_RE = re.compile(
+    r"\b(?:use|with|via|on|prefer|force|switch to|run (?:it |this )?(?:on|with))\s+"
+    r"(?:the\s+)?(?P<model>gpt[\s\-_]?oss(?:[\s\-_]?20b)?|qwen\s*3(?:[\s\-_]?8b)?|"
+    r"qwen\s*2\.?5(?:[\s\-_]?vl)?(?:[\s\-_]?\d+b)?|[a-z0-9][a-z0-9.\-]{2,24})\b",
+    re.I)
+
+
+def requested_model(prompt: str) -> str | None:
+    """The model the operator asked for by name, if it is one we serve."""
+    from .gateway.registry import registry
+
+    text = (prompt or "").lower()
+    served = {c.name: c.name for c in registry.all()}
+    # Match on registry names and on the loose way people write them.
+    aliases: dict[str, str] = {}
+    for name in served:
+        aliases[name] = name
+        aliases[name.replace("-", "")] = name
+        aliases[name.replace("-", " ")] = name
+    aliases.update({
+        "gpt oss": "gpt-oss-20b", "gptoss": "gpt-oss-20b",
+        "gpt-oss": "gpt-oss-20b", "gpt oss 20b": "gpt-oss-20b",
+        "qwen3": "qwen3-8b", "qwen 3": "qwen3-8b",
+        "qwen2.5": "qwen2.5-7b", "qwen 2.5": "qwen2.5-7b",
+        "qwen2.5vl": "qwen2.5vl-3b", "qwen vl": "qwen2.5vl-3b",
+    })
+    for m in _MODEL_REQUEST_RE.finditer(text):
+        raw = re.sub(r"[\s_]+", " ", m.group("model").strip().lower())
+        for key in (raw, raw.replace(" ", ""), raw.replace(" ", "-")):
+            if key in aliases and aliases[key] in served:
+                return aliases[key]
+    return None
+
+
 # Deterministic signals, checked in order. Regex beats a classifier here: it is
 # auditable, instant, and cannot itself be prompt-injected by an uploaded document.
 _RULES: list[tuple[str, str, float]] = [
@@ -188,6 +225,7 @@ class Classification:
     modality: str = "text"
     est_context_tokens: int = 4096
     reasoning: str = "medium"
+    requested_model: str | None = None
 
     @property
     def profile(self) -> TaskProfile:
@@ -256,9 +294,14 @@ def classify(prompt: str, *, attachments: list[dict[str, Any]] | None = None,
         est += min(int(a.get("pages", 1)), 6) * 300
     est = min(est, 30000)
 
+    asked = requested_model(prompt)
+    if asked:
+        signals.append(f"operator asked for {asked} by name")
+
     return Classification(task_type=task_type, confidence=round(confidence, 2),
                           priority=priority, signals=signals, modality=modality,
-                          est_context_tokens=est, reasoning=prof.reasoning)
+                          est_context_tokens=est, reasoning=prof.reasoning,
+                          requested_model=asked)
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +354,14 @@ _TOLERANCE_BY_PRIORITY = {
 # is not fixed: an operator waiting on a safety question wants the best model even
 # if it is slow, while overnight batch work wants throughput above all. Scaling the
 # latency and residency terms by priority encodes that directly.
+# CRITICAL means the operator has already decided that being right matters more
+# than being quick. Weighted at 0.10/0.15 the arithmetic still preferred a
+# resident 8B over the deep reasoner by 0.005 on a safety-critical drawing
+# review — a 0.076 advantage in capability lost to a 20 s load. At CRITICAL the
+# time terms are now small enough to break ties and nothing more.
 #                     latency, residency
 _PRIORITY_PENALTY = {
-    "CRITICAL": (0.10, 0.15),
+    "CRITICAL": (0.03, 0.04),
     "HIGH":     (0.18, 0.25),
     "MEDIUM":   (0.35, 0.45),
     "LOW":      (0.50, 0.60),
@@ -352,6 +400,31 @@ def select_model(cls: Classification, *, resident: list[str] | None = None,
     prof = cls.profile
     resident = resident or []
     exclude = exclude or set()
+
+    # An explicit request wins, provided the model can actually do the job and
+    # hold the context. Overriding it silently would be worse than serving a
+    # slower model.
+    if cls.requested_model and cls.requested_model not in exclude:
+        card = registry.get(cls.requested_model)
+        if card and card.enabled:
+            fit, why = capability_fit(card, prof)
+            budget = int(budget_for(card)) if budget_for else card.ctx_max
+            if why:
+                pass          # cannot meet the floors; fall through to scoring
+            elif cls.est_context_tokens > budget:
+                pass          # will not hold the task; fall through
+            else:
+                return RoutingDecision(
+                    model=card.name, backend=card.backend, score=fit,
+                    capability_fit=fit,
+                    residency_penalty=0.0 if card.name in resident
+                    else card.cold_load_s,
+                    latency_estimate_s=0.0,
+                    resident_reuse=card.name in resident,
+                    reason=(f"the operator asked for {card.name} by name, and it "
+                            f"meets the capability floors for {cls.task_type} "
+                            f"(fit {fit:.2f}) with a {budget}-token context "
+                            f"budget, so the request is honoured"))
 
     considered: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []

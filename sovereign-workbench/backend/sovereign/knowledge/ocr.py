@@ -395,6 +395,63 @@ def extract_pptx(path: Path) -> list[PageText]:
     return pages
 
 
+def extract_cad(path: Path) -> list[PageText]:
+    """Read a CAD drawing's text content for the knowledge base.
+
+    The geometry is handled by the drawings pipeline; this is the searchable
+    text, and it is *exact* — DXF stores the strings the engineer typed, so a
+    tag indexed from here has no OCR error in it at all. That makes a CAD
+    drawing the best possible source for the plant tag register that the raster
+    reader later snaps against.
+    """
+    from ..drawings import cad
+
+    data = cad.extract(path)
+    a = data["assessment"]
+
+    # A symbol library is a legend. Learning it here means the next drawing from
+    # the same project can name its blocks instead of calling them unknown.
+    try:
+        legend = cad.learn_legend(path)
+        if legend["learned"]:
+            cad.save_legend(legend)
+            a["legend_entries_learned"] = legend["learned"]
+    except Exception:
+        pass
+    lines = [
+        f"CAD DRAWING: {path.name}",
+        f"Format: DXF {a.get('dxf_version')}"
+        + (" (converted from DWG)" if a.get("converted_from_dwg") else ""),
+        f"Entities: {a.get('entities')}",
+        f"Layers: {', '.join(a.get('layers', [])[:30])}",
+        "",
+    ]
+    if a.get("blocks_used"):
+        lines.append("Symbol blocks used: " + ", ".join(
+            f"{k} x{v}" for k, v in a["blocks_used"].items()))
+        lines.append("")
+    tags = sorted({t.text for t in data["tags"]})
+    if tags:
+        lines.append(f"Tags found ({len(tags)}): " + ", ".join(tags))
+        lines.append("")
+    by_class: dict[str, int] = {}
+    for sym in data["symbols"]:
+        by_class[sym.sym_class] = by_class.get(sym.sym_class, 0) + 1
+    if by_class:
+        lines.append("Symbols by class: " + ", ".join(
+            f"{k} x{v}" for k, v in sorted(by_class.items())))
+        lines.append("")
+
+    text_entities = data.get("text_entities") or []
+    if text_entities:
+        lines.append("Text on the drawing:")
+        lines.extend(f"  {t}" for t in text_entities[:2000])
+
+    return [PageText(page_no=1, text="\n".join(lines), extractor="cad",
+                     confidence=100.0,
+                     width=data["page_box"].w, height=data["page_box"].h)]
+
+
 def extract_text_file(path: Path) -> list[PageText]:
     raw = path.read_text(errors="replace")
     # Split long plain text into pseudo-pages so citations stay locatable.

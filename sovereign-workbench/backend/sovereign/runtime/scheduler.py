@@ -138,16 +138,33 @@ class Scheduler:
                priority: str | None = None,
                attachments: list[dict[str, Any]] | None = None,
                parent_id: str | None = None,
-               task_type: str | None = None) -> str:
+               task_type: str | None = None,
+               conversation_id: str | None = None) -> str:
         # An explicit workflow pins the task type; a caller who selected
         # `engineering_qa` should not have their task reclassified as extraction
         # because the prompt happens to begin with the word "extract".
         pinned = task_type or router.WORKFLOW_TASK_TYPE.get(workflow)
+        # A follow-up turn inherits the conversation's documents. Asked "explain
+        # this file" and then "what about the valves", the second turn arrives
+        # with no attachment of its own and would otherwise be answered against
+        # nothing.
+        attachments = list(attachments or [])
+        if conversation_id and not attachments:
+            for row in db.query(
+                    "SELECT attachments FROM tasks WHERE conversation_id=? "
+                    "ORDER BY created_at DESC LIMIT 8", (conversation_id,)):
+                prior = db.jload(row["attachments"], []) or []
+                if prior:
+                    attachments = prior
+                    break
+
         cls = router.classify(prompt, attachments=attachments,
                               workflow=pinned, priority_override=priority)
         tid = db.new_id("task")
         db.insert("tasks", {
-            "id": tid, "parent_id": parent_id, "title": title[:200], "prompt": prompt,
+            "id": tid, "parent_id": parent_id,
+            "conversation_id": conversation_id or tid,
+            "title": title[:200], "prompt": prompt,
             "owner": owner, "department": department, "workflow": workflow,
             "task_type": cls.task_type, "priority": cls.priority,
             "effective_priority": float(router.PRIORITY_RANK[cls.priority]),
@@ -251,11 +268,46 @@ class Scheduler:
 
         # 4. Residency feasibility.
         plan = residency.plan(card, task["priority"])
-        if not plan.feasible:
+        if not plan.feasible and plan.transient:
+            # Something resident is still inside its dwell floor. Waiting will
+            # genuinely free it, so queueing is back-pressure rather than a stall.
             return AdmissionDecision("QUEUE", plan.reason, model=card.name,
                                      backend=card.backend, routing=decision.to_dict(),
                                      residency={"feasible": False,
                                                 "reason": plan.reason})
+        if not plan.feasible:
+            # Nothing is resident to evict, so this shortfall will look exactly
+            # the same in an hour. Queueing on it is a deadlock — observed in
+            # use, a CRITICAL drawing task sat in QUEUED indefinitely against
+            # "nothing further is evictable" while the GPU was idle. Try the
+            # models that do fit, cheapest first, and only reject if none does.
+            tried = [f"{card.name} ({plan.reason})"]
+            for alt in gateway.fallback_chain(card):
+                alt_plan = residency.plan(alt, task["priority"])
+                if not alt_plan.feasible:
+                    tried.append(f"{alt.name} ({alt_plan.reason})")
+                    continue
+                budget = residency.context_budget_tokens(alt)
+                if (task["est_context_tokens"] or 0) > budget:
+                    tried.append(f"{alt.name} (context budget {budget} too small)")
+                    continue
+                return AdmissionDecision(
+                    "DEFER",
+                    f"{card.name} does not fit in available VRAM and nothing is "
+                    f"resident to evict, so this cannot improve by waiting. "
+                    f"Falling back to {alt.name}, which fits. {alt_plan.reason}",
+                    model=alt.name, backend=alt.backend,
+                    routing=decision.to_dict(),
+                    residency={"feasible": True, "reason": alt_plan.reason,
+                               "fallback_from": card.name})
+            return AdmissionDecision(
+                "REJECT",
+                "no available model fits in this machine's VRAM right now, and "
+                "nothing is resident that could be evicted to make room. "
+                + " | ".join(tried[:4]),
+                model=card.name, backend=card.backend,
+                routing=decision.to_dict(),
+                residency={"feasible": False, "reason": plan.reason})
 
         # 5. Context / KV budget. The router has already excluded models that
         # cannot hold this task, so reaching here with a shortfall means no model
@@ -443,12 +495,16 @@ class Scheduler:
 
             task["selected_model"] = decision.model
             task["context_budget"] = decision.context_budget
+            task.setdefault("conversation_id", task.get("conversation_id"))
             runner = self._runner_for(task["workflow"])
             if runner is None:
                 raise RuntimeError(f"no runner registered for workflow "
                                    f"{task['workflow']!r}")
             result = runner(task, ctl, (resume or {}).get("state"))
 
+            row = db.query_one("SELECT state FROM tasks WHERE id=?", (tid,))
+            if row and row["state"] == "TERMINATED":
+                return          # stopped mid-flight; do not report success
             db.update("tasks", "id", tid, {
                 "result": db.jdump(result), "finished_at": time.time(),
                 "runtime_s": ctl.elapsed(), "steps_used": ctl.step})
@@ -468,8 +524,10 @@ class Scheduler:
                          detail={"reason": str(exc), "step": ctl.step})
 
         except Cancelled as exc:
-            self._set_state(tid, "TERMINATED", str(exc))
-            ctl.emit("terminated", "Task terminated", str(exc))
+            row = db.query_one("SELECT state FROM tasks WHERE id=?", (tid,))
+            if not row or row["state"] != "TERMINATED":
+                self._set_state(tid, "TERMINATED", str(exc))
+                ctl.emit("terminated", "Task terminated", str(exc))
             audit.record("task", "terminated", outcome="TERMINATED", task_id=tid,
                          detail=str(exc))
 
@@ -480,6 +538,9 @@ class Scheduler:
                          detail=str(exc))
 
         except Exception as exc:
+            row = db.query_one("SELECT state FROM tasks WHERE id=?", (tid,))
+            if row and row["state"] == "TERMINATED":
+                return          # the operator already stopped this
             tb = traceback.format_exc()
             db.update("tasks", "id", tid, {"error": tb[:4000]})
             self._set_state(tid, "FAILED", f"{type(exc).__name__}: {exc}"[:400])
@@ -533,6 +594,17 @@ class Scheduler:
             ctl = self._running.get(task_id)
         if ctl:
             ctl.request_cancel(reason)
+            # The agent only notices at its next checkpoint, which can be a
+            # generation away — up to a minute. Pressing Stop and watching
+            # nothing happen for a minute reads as a broken button, so the task
+            # is marked terminated now and its slot released; the thread winds
+            # down behind that and cannot resurrect the state, because
+            # `_run_task` only writes terminal states it owns.
+            self._set_state(task_id, "TERMINATED", reason)
+            ctl.emit("terminated", "Stopped by operator", reason)
+            with self._lock:
+                self._running.pop(task_id, None)
+            self.wake()
             return True
         row = db.query_one("SELECT state FROM tasks WHERE id=?", (task_id,))
         if row and row["state"] not in TERMINAL_STATES:

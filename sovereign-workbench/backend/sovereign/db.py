@@ -35,6 +35,10 @@ PRAGMA busy_timeout=10000;
 CREATE TABLE IF NOT EXISTS tasks (
     id                TEXT PRIMARY KEY,
     parent_id         TEXT,
+    -- Groups the turns of one conversation. Without it every message is an
+    -- independent task: the agent cannot see what was already said and does not
+    -- inherit the document that was attached a turn ago.
+    conversation_id   TEXT,
     title             TEXT NOT NULL,
     prompt            TEXT NOT NULL,
     owner             TEXT NOT NULL DEFAULT 'operator',
@@ -63,10 +67,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     queue_wait_s      REAL,
     runtime_s         REAL,
     steps_used        INTEGER DEFAULT 0,
-    retries           INTEGER DEFAULT 0
+    retries           INTEGER DEFAULT 0,
+    context_used_tokens   INTEGER DEFAULT 0,
+    context_budget_tokens INTEGER DEFAULT 0,
+    compacted_messages    INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_state ON tasks(state);
 CREATE INDEX IF NOT EXISTS ix_tasks_created ON tasks(created_at);
+CREATE INDEX IF NOT EXISTS ix_tasks_conversation ON tasks(conversation_id, created_at);
 
 CREATE TABLE IF NOT EXISTS task_events (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -369,6 +377,17 @@ CREATE TABLE IF NOT EXISTS drawing_edges (
     rationale  TEXT
 );
 
+-- Symbol legend learned from a project's own block library. Block names in a
+-- real library are internal codes; the caption beside them is what they mean.
+CREATE TABLE IF NOT EXISTS drawing_legend (
+    block       TEXT PRIMARY KEY,
+    description TEXT,
+    sym_class   TEXT,
+    confidence  REAL,
+    source      TEXT,
+    ts          REAL NOT NULL
+);
+
 -- ---------------------------------------------------------------- benchmarks
 CREATE TABLE IF NOT EXISTS benchmarks (
     id       TEXT PRIMARY KEY,
@@ -380,6 +399,42 @@ CREATE TABLE IF NOT EXISTS benchmarks (
 """
 
 
+# Columns added after the first release. The schema script cannot introduce them
+# on an existing database — CREATE TABLE IF NOT EXISTS is a no-op, and an index
+# over a column that does not exist yet fails the whole script — so they are
+# added here first. There is no migration tool because the deployment model is
+# "ship the appliance", but an appliance in the field still has to survive an
+# update.
+_ADDED_COLUMNS: list[tuple[str, str, str]] = [
+    ("tasks", "conversation_id", "TEXT"),
+    ("tasks", "context_used_tokens", "INTEGER DEFAULT 0"),
+    ("tasks", "context_budget_tokens", "INTEGER DEFAULT 0"),
+    ("tasks", "compacted_messages", "INTEGER DEFAULT 0"),
+    ("model_registry", "kv_mb_per_1k", "REAL DEFAULT 0"),
+]
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    for table, column, decl in _ADDED_COLUMNS:
+        try:
+            existing = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.Error:
+            continue
+        if not existing or column in existing:
+            continue
+        try:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.Error:
+            pass
+    # Existing rows predate conversations; each becomes its own thread.
+    try:
+        c.execute("UPDATE tasks SET conversation_id = id "
+                  "WHERE conversation_id IS NULL")
+    except sqlite3.Error:
+        pass
+    c.commit()
+
+
 def connect() -> sqlite3.Connection:
     global _conn
     with _lock:
@@ -387,6 +442,7 @@ def connect() -> sqlite3.Connection:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30.0)
             c.row_factory = sqlite3.Row
+            _migrate(c)
             c.executescript(SCHEMA)
             c.commit()
             _conn = c

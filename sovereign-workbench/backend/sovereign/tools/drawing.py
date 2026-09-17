@@ -44,6 +44,10 @@ def _resolve_path(raw: str) -> Path | None:
         Path.cwd() / p, REPO_ROOT / p, CORPUS_DIR / p,
         CORPUS_DIR / "drawings" / p.name, UPLOAD_DIR / p.name,
     ]
+    if not p.is_absolute():
+        # Uploads are stored under a generated id, so match on the original
+        # filename that the operator would quote.
+        candidates += sorted(UPLOAD_DIR.glob(f"*{p.name}"))
     for c in candidates:
         if c.is_file():
             return c
@@ -56,10 +60,13 @@ class AnalyseDrawingTool(Tool):
     timeout_s = 600.0
     description = (
         "Analyse an engineering drawing (P&ID, isometric, GA) attached to this "
-        "task. Returns the equipment and instrument tags found, and the "
+        "task. Accepts native CAD (.dxf, .dwg), vector or scanned PDF, and "
+        "images. Returns the equipment and instrument tags found, and the "
         "connectivity between them with an explicit confidence status per "
         "connection: CONFIRMED, PROBABLE or UNRESOLVED. Never state a PROBABLE "
-        "or UNRESOLVED connection as fact.")
+        "or UNRESOLVED connection as fact. A DXF or DWG gives the best result "
+        "by far: symbol types come from the drawing's own block names and tags "
+        "from its text entities, so neither is guessed from pixels.")
     parameters = {"type": "object", "properties": {
         "path": {"type": "string",
                  "description": "drawing file path; defaults to the attachment"},
@@ -83,9 +90,16 @@ class AnalyseDrawingTool(Tool):
         if not path:
             attachments = ctx.scratch.get("attachments", [])
             drawing = next((a for a in attachments if a.get("kind") == "drawing"),
-                           None)
+                           attachments[0] if attachments else None)
             if drawing:
                 path = drawing.get("path")
+                if not path and drawing.get("doc_id"):
+                    # An attached document was indexed; its stored file is the
+                    # drawing, whatever the attachment metadata called it.
+                    row = db.query_one("SELECT path FROM documents WHERE id=?",
+                                       (drawing["doc_id"],))
+                    if row:
+                        path = row["path"]
         if not path:
             known = db.query("SELECT title FROM drawings ORDER BY created_at DESC "
                              "LIMIT 10")
@@ -104,11 +118,19 @@ class AnalyseDrawingTool(Tool):
                       f"'corpus/drawings/PID-204-01.pdf', or attach the drawing "
                       f"to the task.")
         try:
-            if p.suffix.lower() == ".pdf":
+            suffix = p.suffix.lower()
+            if suffix in (".dxf", ".dwg"):
+                # Native CAD: symbol types come from block names and tags from
+                # text entities, so nothing is inferred from pixels.
+                a = analyze.analyse_cad(p, title=p.stem, task_id=ctx.task_id)
+            elif suffix == ".pdf":
                 a = analyze.analyse_pdf(p, title=p.stem, task_id=ctx.task_id)
             else:
                 a = analyze.analyse_image(p, title=p.stem, task_id=ctx.task_id)
         except Exception as exc:
+            from ..drawings.cad import ConversionUnavailable
+            if isinstance(exc, ConversionUnavailable):
+                return ToolResult(False, error=str(exc))
             return ToolResult(False, error=f"drawing analysis failed: {exc}")
 
         ctx.scratch["drawing_id"] = a.drawing_id

@@ -35,6 +35,12 @@ from ..tools.base import ToolContext
 from .prompts import system_prompt
 
 CHARS_PER_TOKEN = 3.6          # conservative for English + tables
+SUMMARY_MAX_CHARS = 3200       # ceiling on a compaction summary
+SUMMARY_MIN_CHARS = 400        # ... and a floor, so one is always possible
+SUMMARY_MAX_LINES = 24
+SUMMARY_HEADER = ("[COMPACTED CONTEXT] The turns below were summarised to stay "
+                  "inside this model's context budget. Call a tool again if you "
+                  "need its full output.\n")
 OBSERVATION_LIMIT = 6000
 
 
@@ -96,37 +102,93 @@ class AgentHarness:
         self.extra_instructions = extra_instructions
         self.workspace = WORKSPACE_DIR / task["id"]
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.last_compaction = 0
 
     # -- context management ----------------------------------------------
+    def context_used_tokens(self, messages: list[dict[str, Any]]) -> int:
+        return int(sum(len(m["content"]) for m in messages) / CHARS_PER_TOKEN)
+
+    def _compact(self, dropped: list[dict[str, Any]],
+                 max_chars: int = SUMMARY_MAX_CHARS) -> str:
+        """Compress old turns instead of discarding them outright.
+
+        A bare "3 observations were removed" throws away what they established.
+        Compaction keeps the shape of what happened — which tool ran and the
+        headline of what it returned — at a fraction of the tokens, so a long
+        trajectory degrades into a summary rather than into amnesia.
+
+        The summary is itself budgeted: it has to fit in the room `_trim` set
+        aside for it, or trimming would not actually bring the request inside
+        the context window. When it cannot all fit, the most recent turns are
+        the ones kept, since those are what the next step builds on.
+        """
+        lines: list[str] = []
+        for m in dropped:
+            body = " ".join((m.get("content") or "").split())
+            if m["role"] == "tool":
+                lines.append(f"- {m.get('name', 'tool')} returned: {body[:180]}")
+            elif m["role"] == "assistant":
+                lines.append(f"- you said: {body[:150]}")
+            else:
+                lines.append(f"- earlier: {body[:150]}")
+
+        kept: list[str] = []
+        room = max_chars - len(SUMMARY_HEADER)
+        for line in reversed(lines[-SUMMARY_MAX_LINES:]):
+            if room - (len(line) + 1) < 0:
+                break
+            kept.insert(0, line)
+            room -= len(line) + 1
+        if len(kept) < len(lines):
+            kept.insert(0, f"- ({len(lines) - len(kept)} still earlier turn(s) "
+                           f"dropped entirely)")
+        return SUMMARY_HEADER + "\n".join(kept)
+
     def _trim(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Keep the system prompt, the original task, and the most recent turns.
 
-        Middle-of-trajectory tool observations are the first thing dropped: they
-        have already been folded into the reasoning that followed them, and they
-        are by far the largest consumers of context.
+        Middle-of-trajectory tool observations are compacted first: they have
+        already been folded into the reasoning that followed them, and they are
+        by far the largest consumers of context.
+
+        Room for the summary is reserved *before* the recent turns are packed.
+        Packing first and prepending the summary afterwards is how a trim ends
+        up larger than the budget it was trimming to.
         """
         budget_chars = int(self.context_budget * CHARS_PER_TOKEN * 0.72)
         if sum(len(m["content"]) for m in messages) <= budget_chars:
+            self.last_compaction = 0
             return messages
 
         head = messages[:2]                       # system + original task
-        tail: list[dict[str, Any]] = []
-        used = sum(len(m["content"]) for m in head)
-        dropped = 0
-        for m in reversed(messages[2:]):
-            if used + len(m["content"]) > budget_chars:
-                dropped += 1
-                continue
-            tail.insert(0, m)
-            used += len(m["content"])
-        if dropped:
-            tail.insert(0, {"role": "user", "content":
-                            f"[{dropped} earlier tool observation(s) were removed "
-                            f"to stay inside this model's context budget of "
-                            f"{self.context_budget} tokens. Their conclusions are "
-                            f"reflected in the reasoning that follows them. If you "
-                            f"need one again, call the tool again.]"})
-        return head + tail
+        head_chars = sum(len(m["content"]) for m in head)
+        reserve = min(SUMMARY_MAX_CHARS,
+                      max(SUMMARY_MIN_CHARS, (budget_chars - head_chars) // 4))
+        room = max(0, budget_chars - head_chars - reserve)
+
+        # Walk back from the newest message and keep a contiguous recent
+        # window. Stopping at the first message that does not fit — rather
+        # than skipping it and carrying on — is what keeps the surviving
+        # trajectory continuous instead of leaving holes in the middle of it.
+        keep_from, used = len(messages), 0
+        for i in range(len(messages) - 1, 1, -1):
+            size = len(messages[i]["content"])
+            if used + size > room:
+                break
+            used += size
+            keep_from = i
+
+        dropped = messages[2:keep_from]
+        if not dropped:
+            self.last_compaction = 0
+            return messages
+
+        self.last_compaction = len(dropped)
+        self.ctl.emit("compacted", "Context compacted",
+                      f"{len(dropped)} earlier message(s) summarised to stay "
+                      f"inside the {self.context_budget}-token budget")
+        summary = {"role": "user", "content": self._compact(dropped, reserve)}
+        return head + [summary] + messages[keep_from:]
 
     # -- main loop --------------------------------------------------------
     def run(self, resume: dict[str, Any] | None = None) -> AgentResult:
@@ -141,6 +203,7 @@ class AgentHarness:
                 {"role": "system",
                  "content": system_prompt(self.task.get("task_type") or "general",
                                           self.extra_instructions)},
+                *self._conversation_history(),
                 {"role": "user", "content": self._opening_message()},
             ]
             self.ctl.emit("plan", "Task started",
@@ -162,9 +225,10 @@ class AgentHarness:
             self.ctl.checkpoint_barrier(state.to_dict(),
                                         label=f"before step {state.step}")
 
+            req_messages = self._trim(state.messages)
             req = GenRequest(
                 messages=[ChatMessage(m["role"], m["content"], m.get("name"))
-                          for m in self._trim(state.messages)],
+                          for m in req_messages],
                 model=self.model_name, tools=specs, temperature=0.2,
                 max_tokens=1600, ctx_tokens=self.context_budget,
                 reasoning="low" if state.step > 1 else "medium",
@@ -172,6 +236,11 @@ class AgentHarness:
                               settings.limits.generation_timeout_s),
                 task_id=self.task["id"])
 
+            db.update("tasks", "id", self.task["id"], {
+                "context_used_tokens": self.context_used_tokens(req_messages),
+                "context_budget_tokens": self.context_budget,
+                "compacted_messages": self.last_compaction,
+            })
             res = gateway.generate(req, task_id=self.task["id"])
             if not res.ok:
                 self.ctl.emit("model_error", "Generation failed", res.error)
@@ -255,6 +324,42 @@ class AgentHarness:
                            stopped_because=stopped, scratch=state.scratch)
 
     # -- helpers ----------------------------------------------------------
+    # How many earlier turns to replay. Enough that a follow-up lands in context,
+    # bounded so a long conversation does not crowd out the task itself.
+    HISTORY_TURNS = 6
+
+    def _conversation_history(self) -> list[dict[str, Any]]:
+        """Replay earlier turns of this conversation.
+
+        Each message used to be an independent task, so a follow-up arrived with
+        no memory: "explain this file" then "what about the valves" answered the
+        second question against nothing at all, and the operator watched the
+        agent forget a document it had read a minute earlier.
+        """
+        conv = self.task.get("conversation_id")
+        if not conv or conv == self.task["id"]:
+            return []
+        rows = db.query(
+            "SELECT prompt, result FROM tasks WHERE conversation_id=? "
+            "AND id != ? AND state='COMPLETED' ORDER BY created_at DESC LIMIT ?",
+            (conv, self.task["id"], self.HISTORY_TURNS))
+        out: list[dict[str, Any]] = []
+        for row in reversed(rows):
+            answer = (db.jload(row["result"], {}) or {}).get("summary", "")
+            if not answer:
+                continue
+            out.append({"role": "user", "content": row["prompt"]})
+            # Earlier answers are context, not evidence. Truncating them keeps
+            # the working set small and stops a long reply dominating the window.
+            out.append({"role": "assistant", "content": answer[:1800]})
+        if out:
+            out.insert(0, {
+                "role": "user",
+                "content": ("Earlier turns of this conversation follow, for "
+                            "context. Any document mentioned in them is still "
+                            "attached and can still be read.")})
+        return out
+
     # Words that promise a specific document the user believes they supplied.
     _DEICTIC = re.compile(
         r"\b(the |this |these |that |attached|uploaded|enclosed|provided)\s*"
@@ -280,18 +385,36 @@ class AgentHarness:
             first = attachments[0]
             ref = first.get("doc_id") or first.get("title") or ""
             pages = int(first.get("pages") or 1)
+            is_drawing = (first.get("kind") == "drawing"
+                          or str(first.get("title", "")).lower().endswith(
+                              (".dwg", ".dxf")))
             lines += [
                 "",
-                "Your FIRST action must be to read it. Do not call list_files or "
+                "Your FIRST action must be to open it. Do not call list_files or "
                 "list_documents — you already know which document this is about, "
                 "and listing the catalogue is not an answer.",
                 "",
-                f'  read_document_page with {{"doc_id": "{ref}", "page_no": 1}}',
             ]
-            if pages > 1:
-                lines.append(f"  ... then pages 2 to {min(pages, 6)} as needed.")
-            if first.get("kind") == "drawing":
-                lines.append('  analyse_drawing for the drawing itself.')
+            if is_drawing:
+                # Reading a drawing's indexed *text* returns a list of block
+                # names, which is not an analysis. The geometry tool is what
+                # produces tags and connectivity with confidence labels.
+                lines += [
+                    f'  analyse_drawing with {{"drawing_id": "{ref}"}}',
+                    "",
+                    "That returns the equipment and instrument tags and the "
+                    "connectivity between them, each marked CONFIRMED, PROBABLE "
+                    "or UNRESOLVED. Report those statuses as given: state only "
+                    "CONFIRMED connections as fact, label PROBABLE ones as "
+                    "interpretation, and report UNRESOLVED as CANNOT DETERMINE. "
+                    "Use trace_drawing_connection to answer questions about "
+                    "specific pairs of tags.",
+                ]
+            else:
+                lines.append(
+                    f'  read_document_page with {{"doc_id": "{ref}", "page_no": 1}}')
+                if pages > 1:
+                    lines.append(f"  ... then pages 2 to {min(pages, 6)} as needed.")
             lines += [
                 "",
                 "`extract_document_values` gets labelled engineering values off "

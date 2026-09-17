@@ -25,6 +25,11 @@ TXT_EXT = {".txt", ".md", ".csv", ".log", ".tsv", ".json", ".yaml", ".yml"}
 XLSX_EXT = {".xlsx", ".xlsm"}
 DOCX_EXT = {".docx"}
 PPTX_EXT = {".pptx"}
+# Native CAD. DXF is the open interchange format every CAD system exports; DWG is
+# AutoCAD's proprietary binary and is converted to DXF first. This is the best
+# source a drawing can arrive in — exact geometry, named symbol blocks and text
+# the engineer typed rather than pixels a scanner captured.
+CAD_EXT = {".dxf", ".dwg"}
 
 DOC_CLASSES = ("sop", "manual", "inspection_report", "correspondence",
                "drawing", "specification", "other")
@@ -49,7 +54,7 @@ def guess_class(title: str, text: str = "") -> str:
     title_l = title.lower()
     if re.search(r"register|equipment list|asset list", title_l):
         return "specification"
-    if re.search(r"p&id|pid-|isometric|drawing|dwg", title_l):
+    if re.search(r"p&id|pid-|isometric|drawing|dwg|\.dxf$|\.dwg$", title_l):
         return "drawing"
     if re.search(r"\bsop\b|sop-|procedure", title_l):
         return "sop"
@@ -130,10 +135,22 @@ def ingest_file(path: str | Path, *, title: str | None = None,
 
     digest = sha256_file(src)
     existing = db.query_one(
-        "SELECT id, title, pages, status FROM documents WHERE sha256=?", (digest,))
+        "SELECT id, title, pages, status, doc_class FROM documents WHERE sha256=?",
+        (digest,))
     if existing and existing["status"] == "READY":
+        # Report the same shape a fresh ingest does. Returning a short form here
+        # meant re-attaching a document the operator had already uploaded showed
+        # "class null, 0 chunks" — the caller cannot tell a reused document from
+        # a broken one if the reuse path answers with fewer facts.
+        chunks = db.query_one("SELECT COUNT(*) AS n FROM chunks WHERE doc_id=?",
+                              (existing["id"],))
+        extractors = [r["extractor"] for r in db.query(
+            "SELECT DISTINCT extractor FROM pages WHERE doc_id=? "
+            "ORDER BY extractor", (existing["id"],)) if r["extractor"]]
         return {"doc_id": existing["id"], "title": existing["title"],
-                "pages": existing["pages"], "reused": True,
+                "pages": existing["pages"], "chunks": chunks["n"] if chunks else 0,
+                "doc_class": existing["doc_class"], "status": existing["status"],
+                "failed_pages": [], "extractors": extractors, "reused": True,
                 "detail": "identical content already indexed"}
     if existing:
         # A previous attempt failed and left a row behind. Deduplicating against
@@ -171,11 +188,13 @@ def ingest_file(path: str | Path, *, title: str | None = None,
             pages = ocr.extract_docx(stored)
         elif ext in PPTX_EXT:
             pages = ocr.extract_pptx(stored)
+        elif ext in CAD_EXT:
+            pages = ocr.extract_cad(stored)
         elif ext in TXT_EXT:
             pages = ocr.extract_text_file(stored)
         else:
             supported = sorted(PDF_EXT | IMG_EXT | TXT_EXT | XLSX_EXT
-                               | DOCX_EXT | PPTX_EXT)
+                               | DOCX_EXT | PPTX_EXT | CAD_EXT)
             raise ValueError(
                 f"unsupported file type {ext!r}. Supported: "
                 f"{', '.join(supported)}. Legacy .xls/.doc/.ppt are not read "
@@ -257,7 +276,8 @@ def ingest_file(path: str | Path, *, title: str | None = None,
 def ingest_directory(root: str | Path, doc_class: str | None = None,
                      use_vlm: bool = True) -> list[dict[str, Any]]:
     out = []
-    known = PDF_EXT | IMG_EXT | TXT_EXT | XLSX_EXT | DOCX_EXT | PPTX_EXT
+    known = (PDF_EXT | IMG_EXT | TXT_EXT | XLSX_EXT | DOCX_EXT | PPTX_EXT
+             | CAD_EXT)
     for p in sorted(Path(root).rglob("*")):
         if p.is_file() and p.suffix.lower() in known:
             try:

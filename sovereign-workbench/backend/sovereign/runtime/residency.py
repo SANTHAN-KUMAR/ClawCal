@@ -45,6 +45,11 @@ class ResidencyPlan:
     load_cost_s: float = 0.0
     vram_after_mb: float = 0.0
     already_resident: bool = False
+    # Whether waiting could ever change the answer. An infeasible plan with
+    # nothing resident to evict will still be infeasible in an hour, so queueing
+    # on it is a deadlock rather than back-pressure — the scheduler needs to
+    # know the difference and fall back to a smaller model instead.
+    transient: bool = True
 
 
 class ResidencyManager:
@@ -107,15 +112,28 @@ class ResidencyManager:
         with self._lock:
             entries = self.refresh()
             snap = hardware.snapshot()
-            free = snap["free_vram_mb"]
             need = card.residency_mb
+
+            # VRAM this appliance may allocate, and how much of it our own
+            # resident models are holding. `usable_vram_mb` already excludes the
+            # reserve, so subtracting the reserve again from free VRAM — as this
+            # did — double-charges it and rejects a model that fits. gpt-oss
+            # needs 7241 MB against 7488 MB usable and was refused for want of
+            # 147 MB that had been deducted twice.
+            usable = snap["usable_vram_mb"]
+            ours = sum(e.vram_mb for e in entries.values())
+            # Anything held by processes we do not manage (the display server,
+            # another tenant) is genuinely unavailable.
+            foreign = max(0.0, snap["gpu"].get("used_mb", 0.0) - ours)
+            headroom = max(0.0, usable - foreign - ours)
 
             if card.name in entries:
                 e = entries[card.name]
                 return ResidencyPlan(True, f"{card.name} already resident "
                                            f"({e.vram_mb:.0f} MB, dwell "
                                            f"{e.dwell_s:.0f}s)",
-                                     already_resident=True, vram_after_mb=free)
+                                     already_resident=True,
+                                     vram_after_mb=snap["free_vram_mb"])
 
             # gpt-oss-class models exceed VRAM by design and run part-offloaded;
             # for those the binding constraint is host RAM, not VRAM.
@@ -130,8 +148,8 @@ class ResidencyManager:
                         f"{spill:.0f} MB would spill to host RAM, of which only "
                         f"{free_ram:.0f} MB is available")
 
-            headroom = free - settings.limits.vram_reserve_mb
-            if min(need, snap["usable_vram_mb"]) <= headroom:
+            fits = min(need, usable)
+            if fits <= headroom:
                 return ResidencyPlan(True,
                                      f"{card.name} fits in {headroom:.0f} MB of free "
                                      f"VRAM without evicting anything",
@@ -151,10 +169,10 @@ class ResidencyManager:
                     continue
                 victims.append(e.model)
                 reclaimed += e.vram_mb
-                if headroom + reclaimed >= min(need, snap["usable_vram_mb"]):
+                if headroom + reclaimed >= fits:
                     break
 
-            if headroom + reclaimed >= min(need, snap["usable_vram_mb"]):
+            if headroom + reclaimed >= fits:
                 evict_cost = sum(
                     (registry.get(v).cold_load_s if registry.get(v) else 0.0)
                     for v in victims)
@@ -167,11 +185,21 @@ class ResidencyManager:
                     load_cost_s=card.cold_load_s + evict_cost * 0.15,
                     vram_after_mb=headroom + reclaimed - need)
 
-            detail = "; ".join(blocked) if blocked else "nothing further is evictable"
+            # Could waiting help? Only if something is currently resident that
+            # will become evictable once its dwell expires. With nothing
+            # resident, or nothing left under the dwell floor, the shortfall is
+            # permanent and the caller must pick a different model.
+            transient = bool(blocked)
+            detail = ("; ".join(blocked) if blocked
+                      else ("nothing is resident to evict, so waiting cannot free "
+                            "any more" if not entries
+                            else "nothing further is evictable"))
             return ResidencyPlan(
                 False,
-                f"{card.name} needs {need:.0f} MB but only {headroom + reclaimed:.0f} MB "
-                f"can be made available ({detail})")
+                f"{card.name} needs {fits:.0f} MB of VRAM but only "
+                f"{headroom + reclaimed:.0f} MB can be made available "
+                f"({detail})",
+                transient=transient)
 
     # -- action -----------------------------------------------------------
     def apply(self, card: ModelCard, plan: ResidencyPlan,

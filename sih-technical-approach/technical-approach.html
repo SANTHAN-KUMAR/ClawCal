@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Technical Approach — Clawcal</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#fff}
+  .slide{position:relative;width:1280px;height:720px;overflow:hidden;background:#fff;color:#1A1A1A;
+    font-family:Arial,"Helvetica Neue",Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
+  .abs{position:absolute}
+  .mono{font-family:Consolas,"DejaVu Sans Mono","Courier New",monospace}
+  .serif{font-family:"Times New Roman",Times,serif}
+  .flex{display:flex}
+  /* one node = one stage. detail lives in its caption, not in more boxes. */
+  .node{position:absolute;display:flex;flex-direction:column;padding:15px 16px}
+  .node .t{font-size:15px;font-weight:700;letter-spacing:.3px;margin-top:8px}
+  .node .c{font-size:11px;line-height:1.38;margin-top:6px;color:#4A4F55}
+  .node .m{font-size:10px;margin-top:auto;color:#6B7076}
+  .plain{background:#F1F2F3}
+  .card{background:#fff;border:1px solid #C4C8CC}
+  .ours{background:#A8302B;color:#fff}
+  .ours .c{color:#F3DBD9}.ours .m{color:#E3B2AF}
+  .oss{background:#5C6A75;color:#fff}
+  .oss .c{color:#DCE2E6}.oss .m{color:#BCC6CD}
+  .ic{width:24px;height:24px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body>
+<div class="slide">
+
+  <!-- ============== header ============== -->
+  <div class="abs flex" style="left:44px;top:20px;width:118px;height:52px;border:1.5px solid #7C5FA6;
+       border-radius:50%;align-items:center;justify-content:center;font-size:14.5px;color:#3F3350">Dilijens</div>
+  <div class="abs serif" style="left:0;top:24px;width:1280px;text-align:center;font-size:40px;
+       font-weight:700;letter-spacing:1.6px">TECHNICAL APPROACH</div>
+  <div class="abs flex" style="left:1084px;top:18px;width:152px;height:56px;border:1px dashed #E0E3E6;
+       align-items:center;justify-content:center"><span class="mono" style="font-size:9px;color:#B9BEC3">paste SIH 2026 logo</span></div>
+  <div class="abs" style="left:44px;top:80px;font-size:11.5px;font-weight:700;letter-spacing:1.3px;color:#C00000">
+    ONE SERVER, ONE FENCE &mdash; AND THE MEMORY MATH THAT LETS IT FIT</div>
+
+  <!-- ============== the flow ============== -->
+  <div class="node plain" style="left:44px;top:118px;width:200px;height:144px">
+    <svg class="ic" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="1"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+    <div class="t">Many clients</div>
+    <div class="c">An engineer&rsquo;s desk, an inspector&rsquo;s tablet, a scheduled job, another system.</div>
+    <div class="m mono">browser &middot; CLI &middot; REST</div>
+  </div>
+
+  <div class="node card" style="left:288px;top:118px;width:240px;height:144px">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.8 4v4.6h-4.6"/></svg>
+    <div class="t">AGENT LOOP</div>
+    <div class="c">Plans, acts, observes, repeats. Long runs survive a restart and replay step by step.</div>
+    <div class="m mono">goose &middot; MCP &middot; Temporal &middot; Postgres</div>
+  </div>
+
+  <div class="node ours" style="left:572px;top:118px;width:220px;height:144px">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M12 2.5l8 3v6c0 5-3.4 8.9-8 10-4.6-1.1-8-5-8-10v-6z"/><path d="M8.7 12l2.3 2.3 4.3-4.5"/></svg>
+    <div class="t">APPROVAL GATE</div>
+    <div class="c">Nothing acts or cites unchecked. Held for a human, or refused.</div>
+    <div class="m mono">we write it</div>
+  </div>
+
+  <div class="node oss" style="left:836px;top:118px;width:220px;height:144px">
+    <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.2"/></svg>
+    <div class="t">TOOL SURFACE</div>
+    <div class="c">Code sandbox (ours), headless browser, plant knowledge, documents out.</div>
+    <div class="m mono">Playwright &middot; Docling &middot; pgvector</div>
+  </div>
+
+  <div class="node ours" style="left:572px;top:292px;width:220px;height:130px">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M4 6h4l8 12h4M4 18h4l2-3"/><path d="M16 3l4 3-4 3M16 15l4 3-4 3"/></svg>
+    <div class="t">ADMISSION ROUTER</div>
+    <div class="c">Residency decides which model may see a request.</div>
+    <div class="m mono">we write it &middot; LiteLLM</div>
+  </div>
+
+  <div class="node card" style="left:836px;top:292px;width:220px;height:130px">
+    <svg class="ic" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+    <div class="t">MODEL PLANE</div>
+    <div class="c">A MoE generalist and small specialists. Both resident.</div>
+    <div class="m mono">FreeToken &middot; vLLM &middot; Apache-2.0</div>
+  </div>
+
+  <!-- arrows: one request path, forking once at the loop -->
+  <svg class="abs" style="left:244px;top:118px" width="812" height="304" viewBox="0 0 812 304">
+    <g stroke="#9AA1A8" stroke-width="1.5" fill="none">
+      <path d="M6 72h30"/><path d="M290 72h30"/><path d="M554 72h30"/>
+      <path d="M306 72v167h22"/><path d="M554 239h30"/></g>
+    <circle cx="306" cy="72" r="3.2" fill="#9AA1A8"/>
+    <g fill="#9AA1A8">
+      <path d="M35 67l9 5-9 5z"/><path d="M319 67l9 5-9 5z"/><path d="M583 67l9 5-9 5z"/>
+      <path d="M327 234l9 5-9 5z"/><path d="M583 234l9 5-9 5z"/></g>
+  </svg>
+
+  <!-- the fence: a line, not a container -->
+  <svg class="abs" style="left:1050px;top:178px" width="48" height="24" viewBox="0 0 48 24">
+    <path d="M0 12h26" stroke="#9AA1A8" stroke-width="1.5" fill="none"/>
+    <path d="M25 7l9 5-9 5z" fill="#9AA1A8"/>
+    <path d="M39 5l9 14M48 5l-9 14" stroke="#C00000" stroke-width="2.8" stroke-linecap="round"/></svg>
+  <div class="abs" style="left:1098px;top:118px;width:5px;height:304px;background:#A8302B"></div>
+  <div class="abs" style="left:1114px;top:162px;font-size:15px;font-weight:700;letter-spacing:.7px;color:#A8302B">THE FENCE</div>
+  <div class="abs mono" style="left:1114px;top:187px;font-size:10px;color:#4A4F55;line-height:1.5">default-DROP<br>nftables &middot; Tetragon</div>
+  <div class="abs" style="left:1114px;top:228px;width:124px;font-size:11px;line-height:1.45;color:#4A4F55">Nothing dials out. The kernel refuses, and writes the refusal down.</div>
+
+  <!-- ============== the inversion ============== -->
+  <div class="abs" style="left:44px;top:448px;font-size:16px;font-weight:700">The inversion &mdash; nothing swaps, on either machine</div>
+  <div class="abs" style="left:44px;top:474px;width:1192px;height:0;border-top:1.25px solid #1A1A1A"></div>
+
+  <div class="abs" style="left:44px;top:490px;width:386px;color:#6B7076">
+    <div class="flex" style="align-items:baseline;gap:9px">
+      <span class="mono" style="font-size:12px;color:#9AA1A8">01</span>
+      <span style="font-size:12.5px;font-weight:700">The obvious build</span></div>
+    <div style="font-size:11.5px;line-height:1.5;margin-top:7px">One model fits at a time. Swapping A for B costs 30&ndash;100&nbsp;s &mdash; on every agent step.</div>
+  </div>
+  <div class="abs" style="left:452px;top:490px;width:0;height:62px;border-left:1px solid #DDE0E3"></div>
+
+  <div class="abs" style="left:478px;top:490px;width:352px">
+    <div class="flex" style="align-items:baseline;gap:9px">
+      <span class="mono" style="font-size:12px;color:#9AA1A8">02</span>
+      <span style="font-size:12.5px;font-weight:700">Discrete card &middot; over PCIe</span></div>
+    <div style="font-size:11.5px;line-height:1.5;margin-top:7px">Hot weights and the KV cache stay on the card. Experts stream across the bus; the transfer is the cost.</div>
+  </div>
+  <div class="abs" style="left:858px;top:490px;width:0;height:62px;border-left:1px solid #DDE0E3"></div>
+
+  <div class="abs" style="left:884px;top:490px;width:352px">
+    <div class="flex" style="align-items:baseline;gap:9px">
+      <span class="mono" style="font-size:12px;color:#9AA1A8">03</span>
+      <span style="font-size:12.5px;font-weight:700">Unified memory &middot; no hop</span></div>
+    <div style="font-size:11.5px;line-height:1.5;margin-top:7px">One pool across CPU and GPU. Nothing to transfer at all &mdash; the pool is the ceiling.</div>
+  </div>
+
+  <!-- ============== the claim ============== -->
+  <div class="abs flex" style="left:44px;top:570px;width:1192px;height:48px;border:1.25px solid #1A1A1A;
+       align-items:center;justify-content:center;font-size:17px;font-weight:700">The scarce resource stops being VRAM. It becomes memory the GPU can reach, and how fast.</div>
+  <div class="abs" style="left:44px;top:624px;width:1192px;text-align:right;font-size:10.5px;color:#6B7076">First run measures which of the two this machine is.</div>
+
+  <!-- ============== footer ============== -->
+  <div class="abs" style="left:0;top:648px;width:1280px;height:38px;background:#1F6FB5"></div>
+  <div class="abs flex" style="left:0;top:648px;width:1280px;height:38px;align-items:center;
+       justify-content:center;color:#fff;font-size:12px">@SIH Idea submission- Template</div>
+  <div class="abs flex" style="left:1180px;top:648px;width:56px;height:38px;align-items:center;
+       justify-content:flex-end;color:#fff;font-size:13.5px;font-weight:700">3</div>
+
+</div>
+</body>
+</html>

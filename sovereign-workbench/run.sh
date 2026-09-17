@@ -23,8 +23,16 @@ command -v tesseract >/dev/null && say "OCR" "$(tesseract --version 2>&1 | head 
   || say "OCR" "tesseract MISSING — scanned documents will fail"
 command -v bwrap >/dev/null && say "sandbox" "bubblewrap" \
   || say "sandbox" "bubblewrap missing — will fall back, possibly to degraded mode"
-if command -v nft >/dev/null && nft list table inet sovereign >/dev/null 2>&1; then
+# Reading the ruleset needs CAP_NET_ADMIN. Unprivileged, a missing table and a
+# refused read look identical — and announcing "not loaded" for the second told
+# the operator a control was absent while it was in fact enforcing.
+if ! command -v nft >/dev/null; then
+  say "host egress policy" "nftables not installed"
+elif nft_out=$(nft list table inet sovereign 2>&1); then
   say "host egress policy" "nftables default-deny loaded"
+elif [ "$(id -u)" -ne 0 ] && printf '%s' "$nft_out" \
+     | grep -qiE 'permission denied|not permitted|operation not supported'; then
+  say "host egress policy" "cannot read unprivileged (sudo ./ops/egress-policy.sh status)"
 else
   say "host egress policy" "not loaded (sudo ./ops/egress-policy.sh apply)"
 fi

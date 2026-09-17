@@ -262,15 +262,19 @@ def build_edges(chains: list[Polyline], symbols: list[Symbol],
             continue                        # a line looping back on one symbol
 
         strict = s_strict and e_strict
-        if source_kind == "vector" and strict:
+        # CAD geometry is the drawing itself, not a reading of it, so it earns
+        # the same standing as a vector PDF.
+        exact = source_kind in ("vector", "cad")
+        if exact and strict:
             status, conf = CONFIRMED, 0.94
-            rationale = (f"exact vector geometry; both endpoints within "
+            rationale = (f"exact {source_kind} geometry; both endpoints within "
                          f"{ENDPOINT_TOLERANCE * scale:.0f} units of a symbol "
                          f"boundary "
                          f"({s_dist:.1f} pt and {e_dist:.1f} pt)")
-        elif source_kind == "vector":
+        elif exact:
             status, conf = PROBABLE, 0.66
-            rationale = (f"vector geometry, but attachment required relaxing the "
+            rationale = (f"{source_kind} geometry, but attachment required "
+                         f"relaxing the "
                          f"tolerance to {ENDPOINT_TOLERANCE_RELAXED * scale:.0f} "
                          f"units "
                          f"({s_dist:.1f} pt and {e_dist:.1f} pt)")

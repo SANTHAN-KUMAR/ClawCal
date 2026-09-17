@@ -173,6 +173,19 @@ def model_residency(name: str, payload: dict[str, Any] = Body(default={})) -> di
     return {"pinned": True, "load_seconds": cost, "residency": residency.state()}
 
 
+@app.post("/api/models/evict-all")
+def evict_all_models() -> dict[str, Any]:
+    """Free the GPU: unload every resident model.
+
+    Routing charges each candidate the measured cost of becoming resident, so a
+    model already in VRAM has a standing advantage. That is the right default
+    for throughput and the wrong one when an operator has judged that the next
+    task needs a different model — so they need a way to clear the board.
+    """
+    evicted = residency.evict_all(reason="operator requested offload")
+    return {"evicted": evicted, "residency": residency.state()}
+
+
 @app.post("/api/models/sync")
 def sync_models() -> dict[str, Any]:
     return gateway.sync_registry()
@@ -197,8 +210,12 @@ def create_task(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         priority=payload.get("priority"),
         attachments=attachments,
         task_type=payload.get("task_type"),
+        conversation_id=payload.get("conversation_id"),
     )
-    return {"task_id": tid, "injection_scan": scan.to_dict()}
+    row = db.query_one("SELECT conversation_id FROM tasks WHERE id=?", (tid,))
+    return {"task_id": tid,
+            "conversation_id": row["conversation_id"] if row else tid,
+            "injection_scan": scan.to_dict()}
 
 
 @app.get("/api/tasks")
@@ -206,8 +223,9 @@ def list_tasks(limit: int = Query(60, le=400),
                state: str | None = None) -> dict[str, Any]:
     sql = ("SELECT id,title,state,state_reason,priority,effective_priority,"
            "task_type,workflow,selected_model,routing_reason,created_at,"
-           "started_at,finished_at,runtime_s,queue_wait_s,steps_used,owner "
-           "FROM tasks")
+           "started_at,finished_at,runtime_s,queue_wait_s,steps_used,owner,"
+           "conversation_id,context_used_tokens,context_budget_tokens,"
+           "compacted_messages FROM tasks")
     params: list[Any] = []
     if state:
         sql += " WHERE state=?"
@@ -215,6 +233,19 @@ def list_tasks(limit: int = Query(60, le=400),
     sql += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     return {"tasks": db.rows_to_dicts(db.query(sql, params))}
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: str) -> dict[str, Any]:
+    """Every turn of one conversation, oldest first."""
+    rows = db.rows_to_dicts(db.query(
+        "SELECT id,title,prompt,state,selected_model,result,created_at,"
+        "attachments FROM tasks WHERE conversation_id=? ORDER BY created_at",
+        (conversation_id,)))
+    for r in rows:
+        r["result"] = db.jload(r["result"], {})
+        r["attachments"] = db.jload(r["attachments"], [])
+    return {"conversation_id": conversation_id, "turns": rows}
 
 
 @app.get("/api/tasks/{task_id}")

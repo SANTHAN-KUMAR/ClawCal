@@ -1,0 +1,293 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ffffff; }
+  a { color: #1F6FB5; } a:hover { color: #16507f; }
+  .slide {
+    width: 1280px; height: 720px; position: relative; overflow: hidden;
+    background: #ffffff; color: #1A1A1A;
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .serif { font-family: "Times New Roman", Times, Georgia, serif; }
+  .mono { font-family: Consolas, "DejaVu Sans Mono", "Courier New", monospace; }
+  .ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
+        stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .head { font-size: 13px; font-weight: 700; letter-spacing: .2px; padding-bottom: 5px;
+          border-bottom: 1.2px solid #1A1A1A; }
+  .lbl { font-size: 9.5px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase; color: #6B7076; }
+  .box { border: 1px solid #C4C8CC; background: #ffffff; }
+  .tag { font-size: 9px; letter-spacing: .2px; color: #6B7076; }
+  .row { display: flex; }
+</style>
+</helmet>
+
+<div class="slide">
+
+  <!-- ============ header ============ -->
+  <div style="position: absolute; left: 44px; top: 20px; width: 118px; height: 52px; border: 1.5px solid #7C5FA6; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #3F3350;">Dilijens</div>
+
+  <div class="serif" style="position: absolute; left: 0; top: 28px; width: 1280px; text-align: center; font-size: 34px; font-weight: 700; letter-spacing: 1px;">TECHNICAL APPROACH</div>
+
+  <div style="position: absolute; right: 44px; top: 18px; width: 152px; height: 56px; border: 1px dashed #E0E3E6; display: flex; align-items: center; justify-content: center;">
+    <span class="mono" style="font-size: 8px; color: #B9BEC3; letter-spacing: .4px;">paste SIH 2026 logo</span>
+  </div>
+
+  <div style="position: absolute; left: 44px; top: 84px; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: {{accent}};">WHAT SITS ON THE BOX, AND WHY IT FITS ON ONE</div>
+
+  <!-- ============ band 1 · architecture ============ -->
+  <div style="position: absolute; left: 44px; top: 104px; width: 1192px; height: 290px;">
+
+    <!-- column heads -->
+    <div class="row" style="height: 24px;">
+      <div class="head" style="width: 168px;">The plant network</div>
+      <div style="width: 34px;"></div>
+      <div class="head row" style="width: 812px; align-items: baseline; justify-content: space-between;">
+        <span>The workbench &mdash; one on-premise server</span>
+        <span style="font-size: 9.5px; font-weight: 400; color: #6B7076;">
+          <span style="display: inline-block; width: 8px; height: 8px; background: {{tile}}; margin-right: 4px;"></span>red is what we write
+        </span>
+      </div>
+      <div style="width: 46px;"></div>
+      <div style="width: 132px;"></div>
+    </div>
+
+    <!-- content row -->
+    <div class="row" style="height: 260px; margin-top: 6px;">
+
+      <!-- clients -->
+      <div style="width: 168px; display: flex; flex-direction: column; justify-content: center; gap: 7px;">
+        <div class="lbl" style="margin-bottom: 1px;">Many clients, one server</div>
+        <div class="row" style="align-items: center; gap: 8px; background: #F1F2F3; border: 1px solid #DDE0E3; padding: 7px 9px; color: #1A1A1A;">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="1"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+          <span style="font-size: 11px;">engineer&rsquo;s desk</span>
+        </div>
+        <div class="row" style="align-items: center; gap: 8px; background: #F1F2F3; border: 1px solid #DDE0E3; padding: 7px 9px; color: #1A1A1A;">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="1.5"/><path d="M11 18.5h2"/></svg>
+          <span style="font-size: 11px;">inspector&rsquo;s tablet</span>
+        </div>
+        <div class="row" style="align-items: center; gap: 8px; background: #F1F2F3; border: 1px solid #DDE0E3; padding: 7px 9px; color: #1A1A1A;">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.4 2"/></svg>
+          <span style="font-size: 11px;">a scheduled job</span>
+        </div>
+        <div class="row" style="align-items: center; gap: 8px; background: #F1F2F3; border: 1px solid #DDE0E3; padding: 7px 9px; color: #1A1A1A;">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1"/><rect x="3" y="13" width="18" height="7" rx="1"/><path d="M6.8 7.5h.01M6.8 16.5h.01"/></svg>
+          <span style="font-size: 11px;">another system</span>
+        </div>
+        <div class="mono" style="font-size: 9px; color: #6B7076; margin-top: 2px;">browser &middot; CLI &middot; REST</div>
+      </div>
+
+      <!-- gutter: clients -> workbench -->
+      <div style="width: 34px;">
+        <svg width="34" height="260" viewBox="0 0 34 260" style="display: block;">
+          <path d="M3 130h23" stroke="#9AA1A8" stroke-width="1.4" fill="none"/>
+          <path d="M25 125.5l8 4.5-8 4.5z" fill="#9AA1A8"/>
+        </svg>
+      </div>
+
+      <!-- agent -->
+      <div style="width: 232px; display: flex; flex-direction: column; gap: 14px;">
+        <div class="box" style="height: 144px; padding: 12px;">
+          <div style="font-size: 12.5px; font-weight: 700; letter-spacing: .3px;">AGENT LOOP</div>
+          <div class="row" style="align-items: center; gap: 5px; margin-top: 12px;">
+            <span style="font-size: 10.5px; border: 1px solid #C4C8CC; padding: 3px 7px;">plan</span>
+            <span style="color: #9AA1A8; font-size: 10px;">&rsaquo;</span>
+            <span style="font-size: 10.5px; border: 1px solid #C4C8CC; padding: 3px 7px;">act</span>
+            <span style="color: #9AA1A8; font-size: 10px;">&rsaquo;</span>
+            <span style="font-size: 10.5px; border: 1px solid #C4C8CC; padding: 3px 7px;">observe</span>
+          </div>
+          <div style="position: relative; height: 26px; margin-top: 2px;">
+            <svg width="180" height="26" viewBox="0 0 180 26" style="display: block;">
+              <path d="M172 0v10a6 6 0 0 1-6 6H16a6 6 0 0 1-6-6V4" stroke="#9AA1A8" stroke-width="1.3" fill="none"/>
+              <path d="M6 6.5l4-6 4 6z" fill="#9AA1A8"/>
+            </svg>
+            <span style="position: absolute; left: 62px; top: 9px; background: #ffffff; padding: 0 6px; font-size: 10.5px; color: #6B7076;">repeat</span>
+          </div>
+          <div class="mono" style="font-size: 9.5px; color: #6B7076; margin-top: 8px;">goose &middot; MCP tools</div>
+        </div>
+        <div class="box" style="height: 102px; padding: 12px;">
+          <div style="font-size: 12.5px; font-weight: 700; letter-spacing: .3px;">SCHEDULER &amp; STATE</div>
+          <div style="font-size: 10.5px; line-height: 1.45; margin-top: 7px;">cron &middot; long runs &middot; replayable history</div>
+          <div class="mono" style="font-size: 9.5px; color: #6B7076; margin-top: 9px;">Temporal &middot; Postgres</div>
+        </div>
+      </div>
+
+      <!-- gutter: agent -> checks (fork) -->
+      <div style="width: 32px;">
+        <svg width="32" height="260" viewBox="0 0 32 260" style="display: block;">
+          <path d="M0 72h21" stroke="#9AA1A8" stroke-width="1.4" fill="none"/>
+          <path d="M20 67.5l8 4.5-8 4.5z" fill="#9AA1A8"/>
+          <path d="M0 72c11 0 8 137 21 137" stroke="#9AA1A8" stroke-width="1.4" fill="none"/>
+          <path d="M20 204.5l8 4.5-8 4.5z" fill="#9AA1A8"/>
+        </svg>
+      </div>
+
+      <!-- checks -->
+      <div style="width: 208px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="height: 144px; padding: 12px; background: {{tile}}; color: #ffffff;">
+          <div style="font-size: 12.5px; font-weight: 700; letter-spacing: .3px;">APPROVAL GATE</div>
+          <div style="font-size: 10.5px; color: rgba(255,255,255,.82); margin-top: 2px;">+ provenance</div>
+          <div style="height: 1px; background: rgba(255,255,255,.32); margin: 10px 0;"></div>
+          <div style="font-size: 11.5px; line-height: 1.45;">Nothing acts or cites unchecked.</div>
+          <div class="mono" style="font-size: 9px; color: rgba(255,255,255,.75); margin-top: 12px;">we write it</div>
+        </div>
+        <div style="height: 102px; padding: 12px; background: {{tile}}; color: #ffffff;">
+          <div style="font-size: 12.5px; font-weight: 700; letter-spacing: .3px;">ADMISSION ROUTER</div>
+          <div style="font-size: 10.5px; line-height: 1.45; margin-top: 6px; color: rgba(255,255,255,.92);">Residency-aware, over the LiteLLM gateway.</div>
+          <div class="mono" style="font-size: 9px; color: rgba(255,255,255,.75); margin-top: 9px;">we write it</div>
+        </div>
+      </div>
+
+      <!-- gutter: checks -> surface -->
+      <div style="width: 32px;">
+        <svg width="32" height="260" viewBox="0 0 32 260" style="display: block;">
+          <path d="M0 72h21" stroke="#9AA1A8" stroke-width="1.4" fill="none"/>
+          <path d="M20 67.5l8 4.5-8 4.5z" fill="#9AA1A8"/>
+          <path d="M0 209h21" stroke="#9AA1A8" stroke-width="1.4" fill="none"/>
+          <path d="M20 204.5l8 4.5-8 4.5z" fill="#9AA1A8"/>
+        </svg>
+      </div>
+
+      <!-- surface + models -->
+      <div style="width: 308px; display: flex; flex-direction: column; gap: 14px;">
+
+        <div style="height: 144px;">
+          <div class="lbl">Tool surface</div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 6px;">
+            <div class="row" style="height: 56px; align-items: center; gap: 7px; padding: 0 10px; background: {{tile}}; color: #ffffff;">
+              <svg class="ic" viewBox="0 0 24 24"><rect x="2.5" y="3.5" width="19" height="17" rx="1.5"/><path d="M7 9l3 3-3 3M13.5 15H17"/></svg>
+              <span style="font-size: 11px; line-height: 1.25;">code sandbox</span>
+            </div>
+            <div class="row" style="height: 56px; align-items: center; gap: 7px; padding: 0 10px; background: #5C6A75; color: #ffffff;">
+              <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/></svg>
+              <span style="font-size: 11px; line-height: 1.25;">headless browser</span>
+            </div>
+            <div class="row" style="height: 56px; align-items: center; gap: 7px; padding: 0 10px; background: #5C6A75; color: #ffffff;">
+              <svg class="ic" viewBox="0 0 24 24"><path d="M4 4.5A2 2 0 0 1 6 2.5h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 18.5A2 2 0 0 1 6 16.5h13"/></svg>
+              <span style="font-size: 11px; line-height: 1.25;">plant knowledge</span>
+            </div>
+            <div class="row" style="height: 56px; align-items: center; gap: 7px; padding: 0 10px; background: #5C6A75; color: #ffffff;">
+              <svg class="ic" viewBox="0 0 24 24"><path d="M13.5 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9"/><path d="M13.5 2.5V9H20"/><path d="M8.5 14h6M8.5 17.2h4"/></svg>
+              <span style="font-size: 11px; line-height: 1.25;">documents out</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="height: 102px;">
+          <div class="lbl">Model plane</div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 6px;">
+            <div class="box" style="height: 82px; padding: 9px 10px;">
+              <div style="font-size: 11.5px; font-weight: 700;">FreeToken</div>
+              <div style="font-size: 10px; color: #4A4F55; margin-top: 3px; line-height: 1.35;">MoE generalist</div>
+              <div class="mono" style="display: inline-block; font-size: 8.5px; color: #4A4F55; background: #F1F2F3; padding: 2px 5px; margin-top: 9px;">Apache-2.0</div>
+            </div>
+            <div class="box" style="height: 82px; padding: 9px 10px;">
+              <div style="font-size: 11.5px; font-weight: 700;">vLLM</div>
+              <div style="font-size: 10px; color: #4A4F55; margin-top: 3px; line-height: 1.35;">small specialists</div>
+              <div class="mono" style="display: inline-block; font-size: 8.5px; color: #4A4F55; background: #F1F2F3; padding: 2px 5px; margin-top: 9px;">Apache-2.0</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- gutter: blocked egress -->
+      <div style="width: 46px;">
+        <svg width="46" height="260" viewBox="0 0 46 260" style="display: block;">
+          <path d="M0 72h27" stroke="#9AA1A8" stroke-width="1.4" fill="none"/>
+          <path d="M26 67.5l7 4.5-7 4.5z" fill="#9AA1A8"/>
+          <path d="M37 67l8 10M45 67l-8 10" stroke="{{accent}}" stroke-width="1.9" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <!-- the wall -->
+      <div class="row" style="width: 132px; height: 260px; align-items: center;">
+        <div style="width: 5px; height: 260px; background: {{accent}}; flex: none;"></div>
+        <div style="padding-left: 11px;">
+          <div style="font-size: 11.5px; font-weight: 700; letter-spacing: .6px; color: {{accent}};">THE FENCE</div>
+          <div class="mono" style="font-size: 9px; color: #4A4F55; margin-top: 6px; line-height: 1.55;">default-DROP<br/>nftables &middot; Tetragon</div>
+          <div style="font-size: 10.5px; line-height: 1.45; margin-top: 10px;">Nothing dials out. The kernel refuses.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ band 2 · the inversion ============ -->
+  <div style="position: absolute; left: 44px; top: 404px; width: 1192px;">
+    <div class="head">The inversion &mdash; nothing swaps, on either machine</div>
+
+    <div class="row" style="gap: 16px; margin-top: 8px;">
+
+      <div style="width: 386px; height: 104px; border: 1px solid #DDE0E3; background: #F5F6F7; padding: 11px 12px; color: #6B7076;">
+        <div class="row" style="align-items: baseline; gap: 8px;">
+          <span class="mono" style="font-size: 11px; color: #9AA1A8;">01</span>
+          <span style="font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">The obvious build</span>
+        </div>
+        <div class="row" style="align-items: center; gap: 6px; margin-top: 8px;">
+          <span class="mono" style="font-size: 9px; border: 1px solid #C4C8CC; padding: 3px 7px;">GPU</span>
+          <span class="mono" style="font-size: 9px;">model A &nbsp;&#8644;&nbsp; model B</span>
+        </div>
+        <div style="font-size: 10.5px; line-height: 1.45; margin-top: 8px;">One model fits. The swap costs 30&ndash;100 s, every agent step.</div>
+      </div>
+
+      <div style="width: 386px; height: 104px; border: 1px solid #C4C8CC; background: #ffffff; padding: 11px 12px;">
+        <div class="row" style="align-items: baseline; gap: 8px;">
+          <span class="mono" style="font-size: 11px; color: #9AA1A8;">02</span>
+          <span style="font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: {{accent}};">Ours &middot; discrete card</span>
+        </div>
+        <div class="row" style="align-items: center; gap: 6px; margin-top: 8px;">
+          <span class="mono" style="font-size: 9px; border: 1px solid #9AA1A8; padding: 3px 7px;">HOST RAM</span>
+          <span class="mono" style="font-size: 9px; color: #6B7076;">&rarr; PCIe &rarr;</span>
+          <span class="mono" style="font-size: 9px; border: 1px solid #9AA1A8; padding: 3px 7px;">GPU &middot; hot + KV</span>
+        </div>
+        <div style="font-size: 10.5px; line-height: 1.45; margin-top: 8px;">Experts stream across the bus. The transfer is the cost.</div>
+      </div>
+
+      <div style="width: 386px; height: 104px; border: 1px solid #C4C8CC; background: #ffffff; padding: 11px 12px;">
+        <div class="row" style="align-items: baseline; gap: 8px;">
+          <span class="mono" style="font-size: 11px; color: #9AA1A8;">03</span>
+          <span style="font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: {{accent}};">Ours &middot; unified memory</span>
+        </div>
+        <div class="row" style="align-items: center; gap: 6px; margin-top: 8px;">
+          <span class="mono" style="font-size: 9px; border: 1px solid #9AA1A8; padding: 3px 7px; width: 100%; text-align: center;">ONE POOL &middot; CPU + GPU &middot; KV</span>
+        </div>
+        <div style="font-size: 10.5px; line-height: 1.45; margin-top: 8px;">No PCIe hop. Nothing to transfer &mdash; the pool is the ceiling.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ band 3 · the claim ============ -->
+  <div style="position: absolute; left: 44px; top: 546px; width: 1192px; height: 46px; border: 1.2px solid #1A1A1A; display: flex; align-items: center; justify-content: center;">
+    <span style="font-size: 15px; font-weight: 700;">The scarce resource stops being VRAM. It becomes memory the GPU can reach, and how fast.</span>
+  </div>
+  <div style="position: absolute; left: 44px; top: 598px; width: 1192px; text-align: right; font-size: 10px; color: #6B7076;">First run measures which of the two this machine is.</div>
+
+  <!-- ============ footer ============ -->
+  <div style="position: absolute; left: 0; top: 648px; width: 1280px; height: 38px; background: #1F6FB5;"></div>
+  <div style="position: absolute; left: 0; top: 648px; width: 1280px; height: 38px; display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 11.5px;">@SIH Idea submission- Template</div>
+  <div style="position: absolute; right: 26px; top: 648px; height: 38px; display: flex; align-items: center; color: #ffffff; font-size: 12px; font-weight: 700;">3</div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"accent":{"editor":"color","default":"#C00000","options":["#C00000","#A8302B","#1F4E79","#1A1A1A"]},"tile":{"editor":"color","default":"#A8302B","options":["#A8302B","#C00000","#5C6A75","#8A6D1F"]},"$preview":{"width":1280,"height":720}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#C00000',
+      tile: this.props.tile ?? '#A8302B'
+    };
+  }
+}
+</script>
+</body>
+</html>
