@@ -1,0 +1,74 @@
+# The ClawCal client on the platforms this workstation cannot run: the egress
+# policy applied, checked and removed with each OS's own mechanism (nftables,
+# Windows Filtering Platform, pf), and the standard-library client exercised.
+# See sovereign-workbench/docs/trust-domain.md §5.
+name: client-platforms
+
+on:
+  push:
+    paths: ["sovereign-workbench/clients/**", "sovereign-workbench/scripts/ci_egress_check.py",
+            "sovereign-workbench/backend/sovereign/signing.py",
+            "sovereign-workbench/backend/sovereign/sealed.py",
+            "sovereign-workbench/backend/sovereign/bundles/verify.py",
+            "sovereign-workbench/backend/sovereign/evidence/gatecore.py",
+            ".github/workflows/client-platforms.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  egress:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: sovereign-workbench
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Client compiles and its pure pieces work (standard library only)
+        shell: bash
+        run: |
+          python -m compileall -q clients/clawcal
+          PYTHONPATH=clients:backend python - <<'PY'
+          import os
+          from clawcal import egress, harness
+          from clawcal.vendor import sealed, signing, gatecore
+          seed = os.urandom(32); pub = signing.public_key(seed)
+          k = os.urandom(32)
+          w = sealed.wrap_for_device(k, pub, b"ci")
+          assert sealed.unwrap_on_device(w, seed, b"ci") == k
+          claims, counts = gatecore.evaluate(
+              [{"text": "Minimum is 9.2 mm.", "spans": ["s1"]}],
+              {"s1": {"text": "reading 9.2 mm", "doc_id": "d", "doc_title": "t",
+                      "page_no": 1, "region": None}})
+          assert counts["kept"] == 1
+          harness.check_base_url("http://127.0.0.1:8080/v1", "https://node:8443")
+          print("client pieces OK on", os.name)
+          PY
+
+      - name: Resolve a stand-in node address
+        id: node
+        shell: bash
+        run: echo "ip=$(python -c 'import socket;print(socket.gethostbyname("example.com"))')" >> "$GITHUB_OUTPUT"
+
+      - name: Egress policy — Linux (nftables)
+        if: runner.os == 'Linux'
+        run: sudo -E env "PATH=$PATH" python scripts/ci_egress_check.py "https://${{ steps.node.outputs.ip }}:443"
+
+      - name: Egress policy — macOS (pf)
+        if: runner.os == 'macOS'
+        run: sudo -E env "PATH=$PATH" python scripts/ci_egress_check.py "https://${{ steps.node.outputs.ip }}:443"
+
+      - name: Egress policy — Windows (Windows Filtering Platform)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python scripts/ci_egress_check.py "https://${{ steps.node.outputs.ip }}:443"

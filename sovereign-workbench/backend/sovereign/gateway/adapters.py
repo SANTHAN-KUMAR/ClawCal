@@ -121,7 +121,8 @@ class HarmonyAdapter(PromptAdapter):
         system_parts.append(
             "You are a sovereign on-premise industrial assistant.\n"
             f"Knowledge cutoff: 2024-06\nCurrent date: {date.today().isoformat()}\n\n"
-            f"Reasoning: {req.reasoning}\n\n"
+            # harmony has no "off"; its lowest effort is "low".
+            f"Reasoning: {'low' if req.reasoning in ('off', '', None) else req.reasoning}\n\n"
             "# Valid channels: analysis, commentary, final. "
             "Channel must be included for every message."
         )

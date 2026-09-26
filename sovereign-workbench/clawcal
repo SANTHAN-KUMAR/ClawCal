@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# The terminal client. Standard-library Python only; runs on the box's python3.
+here="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$here/clients${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m clawcal "$@"

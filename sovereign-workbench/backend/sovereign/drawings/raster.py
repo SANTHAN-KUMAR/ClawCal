@@ -245,7 +245,9 @@ def assess_page(binary: "np.ndarray", symbols_img: "np.ndarray",
     # equipment list; rejecting the sheet because it contains tables would refuse
     # every genuine drawing. The tabular regions are excluded instead, and what
     # remains is analysed.
-    looks_tabular = covered > 0.72
+    # A ruled grid over half the page, with edges this tightly shared, is a
+    # table even when title rows and gutters keep the coverage below 72%.
+    looks_tabular = covered > 0.72 or (covered > 0.5 and grid_score > 0.9)
     looks_textual = text_density > 260 and ink < 0.09
 
     return {
@@ -400,7 +402,9 @@ def extract(image_path: str | Path, *, scale: float = 1.0) -> dict[str, Any]:
         minRadius=int(max(8, min(w, h) * 0.006)),
         maxRadius=int(max(20, min(w, h) * 0.030)))
     if circles is not None:
-        for cx, cy, rad in np.round(circles[0]).astype(int):
+        # OpenCV 4 returns (1, N, 3) and OpenCV 5 may drop the leading axis;
+        # reshaping reads both.
+        for cx, cy, rad in np.round(circles.reshape(-1, 3)).astype(int):
             if in_table(cx, cy):
                 continue
             box_px = BBox(cx - rad, cy - rad, cx + rad, cy + rad)
@@ -409,7 +413,10 @@ def extract(image_path: str | Path, *, scale: float = 1.0) -> dict[str, Any]:
     # -- lines
     raw = cv2.HoughLinesP(lines_img, 1, np.pi / 180, HOUGH_THRESHOLD,
                           minLineLength=HOUGH_MIN_LEN, maxLineGap=HOUGH_MAX_GAP)
-    segs = [tuple(map(float, s[0])) for s in raw] if raw is not None else []
+    # OpenCV 4 returns segments as (N, 1, 4); OpenCV 5 returns (N, 4). Indexing
+    # `s[0]` on the latter yields a scalar and the whole raster path raised.
+    segs = ([tuple(map(float, s)) for s in raw.reshape(-1, 4)]
+            if raw is not None else [])
     merged = _merge_collinear(segs)
     polylines = [
         Polyline(id=f"rl-{i:03d}",

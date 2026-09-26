@@ -37,6 +37,21 @@ Runner = Callable[[dict[str, Any], TaskControl, dict[str, Any] | None], dict[str
 TERMINAL_STATES = {"COMPLETED", "FAILED", "TERMINATED", "REJECTED"}
 
 
+# Workflows that never call a model. Routing them anyway made a sovereignty
+# self-test load a 12 GB model it would never use — on the test machine that
+# load is what pushed the host into the OOM killer.
+MODEL_FREE_WORKFLOWS = {"sovereignty_proof"}
+
+
+class QueueFull(RuntimeError):
+    """Back-pressure: the queue is at its configured depth."""
+
+
+def _default_mode() -> str:
+    from ..policy.tool_policy import policy
+    return policy.mode
+
+
 @dataclass
 class AdmissionDecision:
     outcome: str                       # ADMIT | QUEUE | DEFER | REJECT
@@ -66,6 +81,10 @@ class Scheduler:
         self._loop_thread: threading.Thread | None = None
         self._last_admission: list[dict[str, Any]] = []
         self._paused_for: dict[str, str] = {}   # paused task -> task that displaced it
+        # Last admission outcome recorded per task. The queue is re-evaluated
+        # every tick; a decision row is written only when the answer changes,
+        # or the record would hold thousands of identical QUEUE rows per task.
+        self._last_outcome: dict[str, tuple[str, str]] = {}
 
     # -- registration -----------------------------------------------------
     def register_runner(self, workflow: str, runner: Runner) -> None:
@@ -134,12 +153,22 @@ class Scheduler:
 
     # -- submission -------------------------------------------------------
     def submit(self, *, title: str, prompt: str, workflow: str = "general",
-               owner: str = "operator", department: str = "default",
+               owner: str = "system", department: str = "default",
                priority: str | None = None,
                attachments: list[dict[str, Any]] | None = None,
                parent_id: str | None = None,
                task_type: str | None = None,
-               conversation_id: str | None = None) -> str:
+               conversation_id: str | None = None,
+               policy_mode: str | None = None,
+               model: str | None = None) -> str:
+        depth = db.query_one("SELECT COUNT(*) AS n FROM tasks "
+                             "WHERE state IN ('QUEUED','PAUSED')")["n"]
+        if depth >= settings.limits.max_queue_depth:
+            audit.record("task", "rejected_queue_full", outcome="REJECTED",
+                         actor=owner, detail={"depth": depth})
+            raise QueueFull(f"the queue holds {depth} tasks, at its configured "
+                            f"limit of {settings.limits.max_queue_depth}; try again "
+                            f"when some have finished")
         # An explicit workflow pins the task type; a caller who selected
         # `engineering_qa` should not have their task reclassified as extraction
         # because the prompt happens to begin with the word "extract".
@@ -158,7 +187,7 @@ class Scheduler:
                     attachments = prior
                     break
 
-        cls = router.classify(prompt, attachments=attachments,
+        cls = router.classify(prompt, attachments=attachments, model=model,
                               workflow=pinned, priority_override=priority)
         tid = db.new_id("task")
         db.insert("tasks", {
@@ -172,8 +201,9 @@ class Scheduler:
             "state_reason": "awaiting admission",
             "required_caps": db.jdump(cls.profile.needs),
             "est_context_tokens": cls.est_context_tokens,
-            "policy_mode": settings.policy_mode,
+            "policy_mode": policy_mode or _default_mode(),
             "attachments": db.jdump(attachments or []),
+            "requested_model": cls.requested_model,
             "created_at": time.time(),
         })
         db.insert("task_events", {
@@ -199,7 +229,11 @@ class Scheduler:
             est_context_tokens=task["est_context_tokens"] or 4096,
             modality="text",
             reasoning=router.TASK_TYPES.get(task["task_type"] or "general",
-                                            router.TASK_TYPES["general"]).reasoning)
+                                            router.TASK_TYPES["general"]).reasoning,
+            # The operator's explicit choice survives to admission. It used to be
+            # parsed at submission and then dropped here, so "use gpt-oss" was
+            # silently ignored.
+            requested_model=task.get("requested_model"))
 
         # 1. Concurrency and quota.
         with self._lock:
@@ -236,6 +270,12 @@ class Scheduler:
                 f"user {task['owner']} already has {owner_live} running agents, "
                 f"at the per-user quota of {settings.limits.max_concurrent_per_user}")
 
+        if task.get("workflow") in MODEL_FREE_WORKFLOWS:
+            return AdmissionDecision(
+                "ADMIT", f"the {task['workflow']} workflow uses no model, so it needs "
+                         f"an agent slot but no VRAM or host RAM for weights",
+                routing={"reason": "no model required"})
+
         # 2. Route. Context capacity is part of selection, so the router can
         # choose a smaller model with a cheaper KV cache rather than the task
         # being refused for not fitting the preferred one.
@@ -268,7 +308,7 @@ class Scheduler:
 
         # 4. Residency feasibility.
         plan = residency.plan(card, task["priority"])
-        if not plan.feasible and plan.transient:
+        if not plan.feasible and plan.transient and not plan.ram_bound:
             # Something resident is still inside its dwell floor. Waiting will
             # genuinely free it, so queueing is back-pressure rather than a stall.
             return AdmissionDecision("QUEUE", plan.reason, model=card.name,
@@ -300,6 +340,17 @@ class Scheduler:
                     routing=decision.to_dict(),
                     residency={"feasible": True, "reason": alt_plan.reason,
                                "fallback_from": card.name})
+            if plan.ram_bound:
+                # Host RAM is shared with the rest of the machine and frees up
+                # when other programs exit, so this is back-pressure, not a
+                # permanent refusal — but it waits visibly, with the numbers.
+                return AdmissionDecision(
+                    "QUEUE",
+                    "waiting for host memory: " + " | ".join(tried[:3]),
+                    model=card.name, backend=card.backend,
+                    routing=decision.to_dict(),
+                    residency={"feasible": False, "ram_bound": True,
+                               "reason": plan.reason})
             return AdmissionDecision(
                 "REJECT",
                 "no available model fits in this machine's VRAM right now, and "
@@ -382,8 +433,11 @@ class Scheduler:
             if r["state"] == "PAUSED":
                 aged += 0.75
             batch_bonus = 0.5 if (r.get("selected_model") in resident) else 0.0
+            # Written only when it moved, so a long queue is not rewritten in
+            # full every tick.
+            if abs((r.get("effective_priority") or 0.0) - aged) > 0.05:
+                db.update("tasks", "id", r["id"], {"effective_priority": aged})
             r["effective_priority"] = round(aged, 3)
-            db.update("tasks", "id", r["id"], {"effective_priority": aged})
             scored.append((-(aged + batch_bonus), r["created_at"] or 0.0, r))
         scored.sort(key=lambda x: (x[0], x[1]))
         return [s[2] for s in scored]
@@ -434,11 +488,37 @@ class Scheduler:
         audit.bus.publish({"type": "admission", **{k: entry[k] for k in
                                                    ("task_id", "outcome", "reason",
                                                     "model", "priority")}})
+        # The verdict, not its live numbers. A "waiting for host memory" reason
+        # embeds the current free RAM, which moves every tick; keyed on the raw
+        # text, one waiting task wrote 471 identical QUEUE decisions.
+        import re as _re
+        key = (decision.outcome, _re.sub(r"\d+(?:\.\d+)?", "#", decision.reason))
+        with self._lock:
+            changed = self._last_outcome.get(task["id"]) != key
+            self._last_outcome[task["id"]] = key
+            if len(self._last_outcome) > 4096:
+                self._last_outcome.clear()
+        if changed:
+            from ..control import decisions
+            basis: dict[str, Any] = {"priority": task["priority"],
+                                     "model": decision.model,
+                                     "context_budget": decision.context_budget,
+                                     "residency": decision.residency}
+            if decision.outcome in ("QUEUE", "DEFER"):
+                try:
+                    from . import perfmodel
+                    basis["wait"] = perfmodel.wait_estimate(task["id"])
+                except Exception as exc:          # a missing estimate is not fatal
+                    basis["wait"] = {"basis": "unknown", "why": str(exc)[:120]}
+            decisions.record("admission", decision.outcome, decision.reason,
+                             subject_kind="task", subject_id=task["id"],
+                             task_id=task["id"], principal=task.get("owner"),
+                             basis=basis)
 
     def _launch(self, task: dict[str, Any], decision: AdmissionDecision) -> None:
         tid = task["id"]
-        card = registry.get(decision.model)
-        if card is None:
+        card = registry.get(decision.model) if decision.model else None
+        if card is None and decision.model:
             self._set_state(tid, "FAILED", "selected model disappeared")
             return
 
@@ -449,9 +529,23 @@ class Scheduler:
             "routing_reason": decision.routing.get("reason", ""),
             "admitted_at": time.time(),
             "queue_wait_s": time.time() - (task["created_at"] or time.time()),
-            "est_vram_mb": int(card.residency_mb),
+            "est_vram_mb": int(card.residency_mb) if card else 0,
         })
         audit.record("task", "admitted", task_id=tid, detail=decision.to_dict())
+        from ..control import decisions
+        routing = decision.routing or {}
+        decisions.record(
+            "routing", decision.model or "NO_MODEL",
+            routing.get("reason") or decision.reason,
+            subject_kind="task", subject_id=tid, task_id=tid,
+            principal=task.get("owner"),
+            basis={"task_type": task.get("task_type"),
+                   "capability_fit": routing.get("capability_fit"),
+                   "resident_reuse": routing.get("resident_reuse"),
+                   "considered": [{k: c.get(k) for k in ("model", "fit", "score",
+                                                         "resident", "load_s")}
+                                  for c in (routing.get("considered") or [])],
+                   "rejected": routing.get("rejected") or []})
 
         ctl = TaskControl(task_id=tid, priority=task["priority"])
         ctl.step = (resume or {}).get("step", 0)
@@ -473,7 +567,7 @@ class Scheduler:
     def _run_task(self, task: dict[str, Any], ctl: TaskControl,
                   decision: AdmissionDecision, resume: dict[str, Any] | None) -> None:
         tid = task["id"]
-        card = registry.get(decision.model)
+        card = registry.get(decision.model) if decision.model else None
         try:
             # Make the model resident before flipping to RUNNING, and charge the
             # measured cost to the trace so the operator sees where time went.
@@ -573,7 +667,7 @@ class Scheduler:
                      task_id=victim_id,
                      detail={"displaced_by": incoming["id"], "reason": reason})
 
-    def pause(self, task_id: str, reason: str = "paused by operator") -> bool:
+    def pause(self, task_id: str, reason: str = "paused on request") -> bool:
         with self._lock:
             ctl = self._running.get(task_id)
         if not ctl:
@@ -589,7 +683,7 @@ class Scheduler:
         self.wake()
         return True
 
-    def cancel(self, task_id: str, reason: str = "terminated by operator") -> bool:
+    def cancel(self, task_id: str, reason: str = "terminated on request") -> bool:
         with self._lock:
             ctl = self._running.get(task_id)
         if ctl:
@@ -601,7 +695,7 @@ class Scheduler:
             # down behind that and cannot resurrect the state, because
             # `_run_task` only writes terminal states it owns.
             self._set_state(task_id, "TERMINATED", reason)
-            ctl.emit("terminated", "Stopped by operator", reason)
+            ctl.emit("terminated", "Stopped on request", reason)
             with self._lock:
                 self._running.pop(task_id, None)
             self.wake()

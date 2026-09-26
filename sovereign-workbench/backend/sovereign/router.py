@@ -91,10 +91,16 @@ TASK_TYPES: dict[str, TaskProfile] = {
     ),
     "vision_understanding": TaskProfile(
         "vision_understanding",
-        needs={"vision": 0.4},
-        weights={"vision": 1.0, "extraction": 0.7, "speed": 0.5},
+        # Reading the image is done at ingest by the perception pipeline: OCR
+        # and the best *measured* VLM, cross-checked. The agent reports what was
+        # read and must keep its labels, which is text work (§6.2: "the vision
+        # model is never routed a reporting task"). With a vision floor here,
+        # the task went to whichever VLM could hold an agent's context, on an
+        # 8 GB GPU the weakest one.
+        needs={"text": 0.85, "tool_use": 0.6},
+        weights={"extraction": 1.0, "structured": 0.8, "tool_use": 0.7, "speed": 0.5},
         est_context_tokens=5000, reasoning="low",
-        description="Read a scanned page, photograph or handwritten note.",
+        description="Report on a scanned page, photograph or handwritten note.",
     ),
     "drawing_analysis": TaskProfile(
         "drawing_analysis",
@@ -233,6 +239,7 @@ class Classification:
 
 
 def classify(prompt: str, *, attachments: list[dict[str, Any]] | None = None,
+             model: str | None = None,
              workflow: str | None = None,
              priority_override: str | None = None) -> Classification:
     """Classify a task. Deterministic, explainable, and injection-resistant."""
@@ -294,7 +301,7 @@ def classify(prompt: str, *, attachments: list[dict[str, Any]] | None = None,
         est += min(int(a.get("pages", 1)), 6) * 300
     est = min(est, 30000)
 
-    asked = requested_model(prompt)
+    asked = model if (model and registry.get(model)) else requested_model(prompt)
     if asked:
         signals.append(f"operator asked for {asked} by name")
 

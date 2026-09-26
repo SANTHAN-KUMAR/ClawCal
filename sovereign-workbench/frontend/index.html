@@ -3,319 +3,401 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClawCal — Sovereign On-Premise AI Workbench</title>
-<link rel="icon" type="image/png" href="/static/img/clawcal-mark.png">
+<title>ClawCal — Sovereign AI Workbench</title>
+<link rel="icon" type="image/svg+xml" href="/static/img/clawcal-icon.svg">
+<link rel="alternate icon" type="image/png" href="/static/img/clawcal-mark.png">
 <link rel="stylesheet" href="/static/css/fonts.css">
 <link rel="stylesheet" href="/static/css/app.css">
+<script>
+  /* Apply the saved theme before first paint, so a dark-mode user never sees a
+     white flash. "system" (no attribute) follows the operating system. */
+  try { var t = localStorage.getItem('clawcal.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (_) { }
+</script>
 </head>
 <body>
 
-<div class="app">
+<!-- Icon set. One stroke weight, one grid, drawn for this product. -->
+<svg class="sprite" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 24 24"><path d="M2 8a6 6 0 0 1 6-6h14v7.5h-4v-3H7v11h11v-3h4V22H2z"/><rect x="11" y="10.5" width="3" height="3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></symbol>
+  <symbol id="i-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.2"/><path d="m13 13 3.5 3.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 20 20"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5v6a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3A1.5 1.5 0 0 1 4 11.5z"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 20 20"><path d="M3.5 4.5h3.5v11H3.5zM8.5 4.5h3v11h-3zM12.8 5.2l2.6-.6 2.1 10.4-2.6.6z"/></symbol>
+  <symbol id="i-out" viewBox="0 0 20 20"><path d="M6 3.5h5.5L15 7v9a.5.5 0 0 1-.5.5h-8.5a.5.5 0 0 1-.5-.5v-12a.5.5 0 0 1 .5-.5zM11 3.5V7.5h4M8 11h5M8 13.5h3.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 20 20"><path d="m5 10.5 3 3 7-7"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 20 20"><path d="M10 3.5v6.5M7 5v6M13 5v5.5M16 8v4.5a4.5 4.5 0 0 1-4.5 4.5h-1A5 5 0 0 1 6 14.2L4 10.6a1.3 1.3 0 0 1 2.2-1.3L7 10.5"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 20 20"><path d="M10 2.8 4.5 5v4.6c0 3.4 2.3 6.1 5.5 7.6 3.2-1.5 5.5-4.2 5.5-7.6V5z"/><path class="tick" d="m7.6 10 1.7 1.7 3.2-3.4"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 20 20"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 20 20"><path d="M11 2.8 4.8 11h4.4l-1 6.2L15.2 9h-4.4z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 20 20"><path d="M2.5 10S5 5 10 5s7.5 5 7.5 5-2.5 5-7.5 5-7.5-5-7.5-5z"/><circle cx="10" cy="10" r="2.2"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 20 20"><path d="M12 5.5 7 10.5a1.9 1.9 0 0 0 2.7 2.7l5.4-5.4a3.4 3.4 0 0 0-4.8-4.8L4.9 8.4a4.9 4.9 0 0 0 6.9 6.9l4.3-4.3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 20 20"><path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9"/></symbol>
+  <symbol id="i-car" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 20 20"><path d="m8 5 5 5-5 5"/></symbol>
+  <symbol id="i-draw" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M6 12h3V8h5M14 8v4"/><circle cx="14" cy="12" r="1.2"/></symbol>
+  <symbol id="i-calc" viewBox="0 0 20 20"><rect x="4.5" y="3" width="11" height="14" rx="1.5"/><path d="M7 6.5h6M7.3 10h.01M10 10h.01M12.7 10h.01M7.3 13h.01M10 13h.01M12.7 13h.01"/></symbol>
+  <symbol id="i-docs" viewBox="0 0 20 20"><path d="M7 3.5h6l3 3v8.5M4 6.5h6.5l2.5 2.5v7.5H4z"/></symbol>
+  <symbol id="i-sheet" viewBox="0 0 20 20"><rect x="3.5" y="4" width="13" height="12" rx="1.5"/><path d="M3.5 8h13M3.5 12h13M8 4v12"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 20 20"><path d="M10 3.5 17 16H3z"/><path d="M10 8.5v3.5M10 14.2v.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 20 20"><path d="m6 6 8 8M14 6l-8 8"/></symbol>
+  <symbol id="i-info" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 9v4.5M10 6.5v.01"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 20 20"><path d="M2.5 10.5h3.5l2-4.5 3.5 9 2-4.5h4"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="1.5"/><path d="M8 2.5V5M12 2.5V5M8 15v2.5M12 15v2.5M2.5 8H5M2.5 12H5M15 8h2.5M15 12h2.5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 20 20"><path d="M7.5 5.5h9M7.5 10h9M7.5 14.5h9M3.5 5.5h.01M3.5 10h.01M3.5 14.5h.01"/></symbol>
+  <symbol id="i-ledger" viewBox="0 0 20 20"><path d="M5 3.5h10v13H5zM8 7h4.5M8 10h4.5M8 13h2.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2"/><path d="M10 2.8v1.6M10 15.6v1.6M2.8 10h1.6M15.6 10h1.6M4.9 4.9 6 6M14 14l1.1 1.1M4.9 15.1 6 14M14 6l1.1-1.1"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 20 20"><path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 20 20"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/></symbol>
+  <symbol id="i-side" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M8 4v12"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 20 20"><path d="M7.5 5.5v9M12.5 5.5v9"/></symbol>
+  <symbol id="i-play" viewBox="0 0 20 20"><path d="M7 5.2v9.6l7.5-4.8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 20 20"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 20 20"><path d="M10 4.5v10M5.5 10.5 10 15l4.5-4.5M4.5 17h11"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 20 20"><path d="M10 14V4M5.5 8 10 3.5 14.5 8M4.5 16.5h11"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 20 20"><path d="M15.5 9.5a5.5 5.5 0 1 1-1.6-3.9M15.5 3.5v3h-3"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 20 20"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 20 20"><path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.2 5.2l2 2M12.8 12.8l2 2M5.2 14.8l2-2M12.8 7.2l2-2"/></symbol>
+</svg>
 
-  <!-- ================================================================ rail -->
-  <aside class="rail">
-    <div class="brand">
-      <img class="wordmark" src="/static/img/clawcal-wordmark.png"
-           alt="ClawCal" width="168" height="22" decoding="async">
-      <!-- The product is ClawCal; the organisation below is who this appliance
-           is deployed for, and still comes straight from /api/system. -->
-      <div class="deploy">
-        <b id="orgName">—</b>
-        <span id="orgUnit"></span>
-      </div>
+<div class="app" id="app">
+
+  <!-- ================================================================ sidebar -->
+  <aside class="sb" id="sidebar" aria-label="Navigation">
+    <div class="sb-head">
+      <a class="brand" href="/" aria-label="ClawCal home">
+        <svg class="brand-mark"><use href="#logo"/></svg>
+        <span class="wordmark" role="img" aria-label="ClawCal"></span>
+      </a>
+      <button class="icon-btn sb-close" id="sbClose" type="button" aria-label="Close menu"><svg><use href="#i-x"/></svg></button>
     </div>
+    <div class="org" id="org"><b id="orgName">&nbsp;</b><span id="orgUnit"></span></div>
 
-    <button class="new-task" id="newTaskBtn">
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-        stroke-width="1.7" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>
-      New task
+    <button class="btn primary new-chat" id="newChatBtn" type="button">
+      <svg><use href="#i-plus"/></svg>New chat<kbd>Ctrl ⇧ O</kbd>
     </button>
 
-    <nav class="nav" id="tabs" aria-label="Sections">
-      <div class="nav-group">
-        <span class="nav-label">Tasks</span>
-        <button data-v="work" class="on chat-entry">Conversation</button>
-        <ul class="thread-list" id="threadList"></ul>
-      </div>
-      <div class="nav-group quiet">
-        <span class="nav-label">Workspace</span>
-        <button data-v="tasks">All tasks<span class="count" id="cTasks"></span></button>
-        <button data-v="approvals">Approvals<span class="count" id="cAppr"></span></button>
-        <button data-v="runtime">Resource runtime</button>
-        <button data-v="models">Models</button>
-        <button data-v="docs">Documents<span class="count" id="cDocs"></span></button>
-        <button data-v="drawings">Drawings<span class="count" id="cDwg"></span></button>
-        <button data-v="evidence">Evidence</button>
-        <button data-v="deliverables">Deliverables<span class="count" id="cArt"></span></button>
-        <button data-v="sovereignty">Sovereignty<span class="count" id="cNet"></span></button>
-        <button data-v="audit">Audit</button>
-      </div>
+    <label class="sb-search">
+      <svg><use href="#i-search"/></svg>
+      <input id="chatSearch" type="search" placeholder="Search chats" autocomplete="off" aria-label="Search chats">
+      <kbd>Ctrl K</kbd>
+    </label>
+
+    <nav class="chats" id="chatList" aria-label="Chats"></nav>
+
+    <nav class="places" id="places" aria-label="Sections">
+      <button type="button" data-v="library"><svg><use href="#i-lib"/></svg><span>Library</span><span class="n" id="cDocs"></span></button>
+      <button type="button" data-v="outputs"><svg><use href="#i-out"/></svg><span>Outputs</span><span class="n" id="cArt"></span></button>
+      <button type="button" data-v="approvals"><svg><use href="#i-hand"/></svg><span>Approvals</span><span class="n alert" id="cAppr"></span></button>
+      <button type="button" data-v="admin" id="adminNav" hidden><svg><use href="#i-gear"/></svg><span>Admin</span></button>
     </nav>
 
-    <div class="rail-foot">
-      <div class="cap">Appliance</div>
-      <div class="meter" id="mVram"><div class="lbl"><span>VRAM</span><span id="vramTxt">—</span></div>
-        <div class="bar"><i></i></div></div>
-      <div class="meter" id="mRam"><div class="lbl"><span>System RAM</span><span id="ramTxt">—</span></div>
-        <div class="bar"><i></i></div></div>
-      <div class="meter" id="mGpu"><div class="lbl"><span>GPU compute</span><span id="gpuTxt">—</span></div>
-        <div class="bar"><i></i></div></div>
-      <div class="meter" id="mTps"><div class="lbl"><span>Decode rate</span><span id="tpsTxt">—</span></div></div>
-      <div class="link-state">
-        <i class="dot" id="sseDot"></i><span id="sseTxt">connecting…</span>
-      </div>
+    <button type="button" class="engine" id="engine" title="Workbench status">
+      <span class="engine-top"><i class="px" id="engineDot"></i><b id="engineTxt">Connecting…</b></span>
+      <span class="engine-sub" id="engineSub"></span>
+      <span class="engine-bar"><i id="engineBar"></i></span>
+    </button>
+
+    <div class="me">
+      <span class="av" id="meAv">·</span>
+      <span class="me-txt"><b id="meName">&nbsp;</b><span id="meRole"></span></span>
+      <button class="icon-btn" id="themeBtn" type="button" aria-label="Switch theme" title="Switch theme"><svg><use href="#i-moon"/></svg></button>
     </div>
   </aside>
+  <div class="scrim" id="scrim" hidden></div>
 
-  <!-- ================================================================ main -->
+  <!-- ================================================================== main -->
   <div class="main">
-    <header class="topbar">
-      <div class="topbar-head">
-        <h1 id="viewTitle">Conversation</h1>
+    <header class="tb">
+      <button class="icon-btn sb-open" id="sbOpen" type="button" aria-label="Open menu"><svg><use href="#i-menu"/></svg></button>
+      <div class="tb-title">
+        <h1 id="viewTitle">New chat</h1>
         <p id="viewDesc"></p>
       </div>
-      <div class="chips">
-        <span class="chip ok" id="egressBadge">Egress default-deny</span>
-        <span class="chip" id="policyBadge">Policy <b>—</b></span>
-        <span class="chip" id="modelBadge">Resident <b>—</b></span>
+      <div class="tb-actions" id="tbActions"></div>
+      <div class="seal-wrap">
+        <button type="button" class="seal" id="sealBtn" aria-expanded="false" aria-controls="sealPop">
+          <svg><use href="#i-shield"/></svg><span id="sealTxt">Checking…</span>
+        </button>
+        <div class="pop seal-pop" id="sealPop" hidden role="dialog" aria-label="Data protection">
+          <div class="seal-head" id="sealHead"></div>
+          <ul class="seal-list" id="sealList"></ul>
+          <div class="pop-foot">
+            <button type="button" class="btn sm secondary" id="sealTest">Run self-test</button>
+            <button type="button" class="btn sm ghost" id="sealMore" data-admin>Security details</button>
+          </div>
+        </div>
       </div>
     </header>
 
-    <div class="scroll" id="scroll">
-    <div class="scroll-inner" id="scrollInner">
-    <main>
+    <div class="net-banner" id="netBanner" hidden role="status">
+      <span class="pixels"><i></i><i></i><i></i></span>
+      <span id="netBannerTxt">Reconnecting to the workbench…</span>
+    </div>
 
-    <!-- --------------------------------------------------------- workbench -->
-    <section class="view on" id="v-work">
+    <div class="scroll chat-bg" id="scroll">
+    <main id="views">
+
+    <!-- ------------------------------------------------------------ chat -->
+    <section class="view on" id="v-chat" aria-label="Chat">
       <div class="thread" id="thread"></div>
     </section>
 
-    <!-- ------------------------------------------------------------- tasks -->
-    <section class="view" id="v-tasks">
-      <div class="section">
-        <div class="tw"><table>
-          <thead><tr><th>Task</th><th>Type</th><th>Priority</th><th>State</th>
-            <th>Model</th><th>Steps</th><th>Queued</th><th>Runtime</th><th></th></tr></thead>
-          <tbody id="taskRows"></tbody></table></div>
-      </div>
-    </section>
-
-    <!-- ----------------------------------------------------------- runtime -->
-    <section class="view" id="v-runtime">
-      <div class="cols">
-        <div class="section">
-          <div class="section-head"><h2>Running</h2></div>
-          <div class="tw"><table>
-            <thead><tr><th>Task</th><th>Priority</th><th>Model</th><th>Steps</th></tr></thead>
-            <tbody id="runRows"></tbody></table></div>
-        </div>
-        <div class="section" style="margin-top:0">
-          <div class="section-head"><h2>Queue</h2>
-            <span class="aside">effective priority after aging</span></div>
-          <div class="tw"><table>
-            <thead><tr><th>Task</th><th>Pri</th><th>Eff</th><th>Why it is waiting</th></tr></thead>
-            <tbody id="queueRows"></tbody></table></div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-head"><h2>Model residency</h2></div>
-        <p class="note" id="residencyNote"></p>
-        <div id="residency"></div>
-      </div>
-
-      <div class="section">
-        <div class="section-head"><h2>Runtime limits</h2></div>
-        <dl class="kv" id="limits"></dl>
-      </div>
-
-      <div class="section">
-        <div class="section-head"><h2>Admission decisions</h2></div>
-        <div class="tw"><table>
-          <thead><tr><th>Outcome</th><th>Task</th><th>Pri</th><th>Model</th><th>Reason</th></tr></thead>
-          <tbody id="admissionRows"></tbody></table></div>
-      </div>
-    </section>
-
-    <!-- ------------------------------------------------------------ models -->
-    <section class="view" id="v-models">
-      <div class="section">
-        <div class="section-head"><h2>Registry</h2></div>
-        <div class="tw"><table>
-          <thead><tr><th>Model</th><th>Role</th><th>Backend</th><th>Weights</th>
-            <th>KV / 1k</th><th>Load</th><th>Decode</th><th>Status</th><th></th></tr></thead>
-          <tbody id="modelRows"></tbody></table></div>
-      </div>
-      <div class="section">
-        <div class="section-head"><h2>Capabilities</h2>
-          <span class="aside">router scores, 0–1</span></div>
-        <div class="tw"><table><thead><tr id="capHead"></tr></thead>
-          <tbody id="capRows"></tbody></table></div>
-      </div>
-      <div class="section">
-        <div class="section-head"><h2>Hardware profile</h2></div>
-        <dl class="kv" id="hwProfile"></dl>
-      </div>
-    </section>
-
-    <!-- --------------------------------------------------------- documents -->
-    <section class="view split" id="v-docs">
-      <div class="side">
-        <div class="section-head"><h2>Indexed documents</h2></div>
-        <ul class="list" id="docList"></ul>
-      </div>
-      <div id="docDetail"></div>
-    </section>
-
-    <!-- ---------------------------------------------------------- drawings -->
-    <section class="view split" id="v-drawings">
-      <div class="side">
-        <div class="section-head"><h2>Analysed drawings</h2></div>
-        <ul class="list" id="dwgList"></ul>
-        <div class="panel" style="margin-top:28px">
-          <h2>Analyse a drawing</h2>
-          <div class="field">
-            <label for="dwgPath">Path on the appliance</label>
-            <input type="text" id="dwgPath" value="corpus/drawings/PID-204-01.pdf">
+    <!-- --------------------------------------------------------- library -->
+    <section class="view" id="v-library" aria-label="Library">
+      <div class="page">
+        <div class="page-bar">
+          <div class="seg" role="tablist" id="libTabs">
+            <button type="button" role="tab" class="on" data-t="docs" aria-selected="true">Documents<span class="n" id="cDocs2"></span></button>
+            <button type="button" role="tab" data-t="drawings" aria-selected="false">Drawings<span class="n" id="cDwg"></span></button>
           </div>
-          <div class="actions" style="margin-top:16px">
-            <button class="btn primary" id="dwgBtn">Analyse</button>
+          <span class="grow"></span>
+          <input type="file" id="libFile" hidden>
+          <button type="button" class="btn secondary" id="libUpload"><svg><use href="#i-upload"/></svg>Add document</button>
+        </div>
+        <div class="split">
+          <div class="split-list">
+            <div id="docPane"><ul class="items" id="docList"></ul></div>
+            <div id="dwgPane" hidden>
+              <ul class="items" id="dwgList"></ul>
+              <details class="card analyse">
+                <summary><svg><use href="#i-draw"/></svg>Analyse a drawing on this machine</summary>
+                <div class="field">
+                  <label for="dwgPath">File path</label>
+                  <input class="input mono" type="text" id="dwgPath" value="corpus/drawings/PID-204-01.pdf">
+                  <span class="hint">A PDF, image or CAD file already on the workbench.</span>
+                </div>
+                <button type="button" class="btn primary sm" id="dwgBtn">Analyse</button>
+              </details>
+            </div>
           </div>
-          <div class="msg" id="dwgMsg" role="status" aria-live="polite"></div>
+          <div class="split-detail" id="libDetail"></div>
         </div>
       </div>
-      <div id="dwgDetail"></div>
     </section>
 
-    <!-- ---------------------------------------------------------- evidence -->
-    <section class="view" id="v-evidence">
-      <div class="section">
-        <div class="section-head"><h2>Claims and their evidence class</h2></div>
-        <div class="legend" style="margin:14px 0 22px">
-          <div><span class="cls A">A</span><div><b>Source</b>
-            <span>present in a cited document region</span></div></div>
-          <div><span class="cls B">B</span><div><b>Derived</b>
-            <span>reproducible calculation</span></div></div>
-          <div><span class="cls C">C</span><div><b>Interpretation</b>
-            <span>a judgement made from evidence</span></div></div>
-          <div><span class="cls D">D</span><div><b>Unsupported</b>
-            <span>refused rather than invented</span></div></div>
-        </div>
-        <div class="tw"><table>
-          <thead><tr><th>Class</th><th>Value</th><th>Statement</th><th>Basis</th><th>Task</th></tr></thead>
-          <tbody id="claimRows"></tbody></table></div>
-      </div>
-      <div class="section">
-        <div class="section-head"><h2>Calculation traces</h2></div>
-        <div class="tw"><table>
-          <thead><tr><th>ID</th><th>Quantity</th><th>Formula</th><th>Substitution</th>
-            <th>Result</th><th>Inputs verified</th></tr></thead>
-          <tbody id="calcRows"></tbody></table></div>
-      </div>
+    <!-- --------------------------------------------------------- outputs -->
+    <section class="view" id="v-outputs" aria-label="Outputs">
+      <div class="page"><div class="files" id="artGrid"></div></div>
     </section>
 
-    <!-- ------------------------------------------------------ deliverables -->
-    <section class="view" id="v-deliverables">
-      <div class="section">
+    <!-- ------------------------------------------------------- approvals -->
+    <section class="view" id="v-approvals" aria-label="Approvals">
+      <div class="page narrow">
+        <h2 class="h-sec">Waiting for you</h2>
+        <div id="pendingApprovals" class="stack"></div>
+        <h2 class="h-sec">Earlier decisions</h2>
         <div class="tw"><table>
-          <thead><tr><th>File</th><th>Kind</th><th>Size</th><th>SHA-256</th><th>Task</th><th></th></tr></thead>
-          <tbody id="artRows"></tbody></table></div>
-      </div>
-    </section>
-
-    <!-- --------------------------------------------------------- approvals -->
-    <section class="view" id="v-approvals">
-      <div class="section">
-        <div class="section-head"><h2>Awaiting a decision</h2></div>
-        <div id="pendingApprovals"></div>
-      </div>
-      <div class="section">
-        <div class="section-head"><h2>Decision history</h2></div>
-        <div class="tw"><table>
-          <thead><tr><th>Tool</th><th>Summary</th><th>State</th><th>Decided by</th></tr></thead>
+          <thead><tr><th>Action</th><th>What it was</th><th>Decision</th><th>By</th><th>When</th></tr></thead>
           <tbody id="apprRows"></tbody></table></div>
       </div>
     </section>
 
-    <!-- ------------------------------------------------------- sovereignty -->
-    <section class="view" id="v-sovereignty">
-      <div class="section">
-        <div class="section-head"><h2>Enforcement layers</h2></div>
-        <dl class="kv" id="sovLayers"></dl>
-        <div class="actions" style="margin-top:20px">
-          <button class="btn primary" id="selftestBtn">Run sovereignty self-test</button>
-          <span class="aside" style="font-family:var(--alt);font-size:12px;color:var(--muted);max-width:52ch">
-            Deliberately attempts outbound connections from the control plane and the
-            sandbox, and records every refusal.</span>
+    <!-- ----------------------------------------------------------- admin -->
+    <section class="view" id="v-admin" aria-label="Admin">
+      <div class="page">
+        <div class="seg sub" role="tablist" id="adminTabs">
+          <button type="button" role="tab" class="on" data-t="system" aria-selected="true"><svg><use href="#i-pulse"/></svg>System</button>
+          <button type="button" role="tab" data-t="models" aria-selected="false"><svg><use href="#i-chip"/></svg>Models</button>
+          <button type="button" role="tab" data-t="security" aria-selected="false"><svg><use href="#i-shield"/></svg>Security</button>
+          <button type="button" role="tab" data-t="evidence" aria-selected="false"><svg><use href="#i-docs"/></svg>Evidence</button>
+          <button type="button" role="tab" data-t="tasks" aria-selected="false"><svg><use href="#i-list"/></svg>All runs</button>
+          <button type="button" role="tab" data-t="activity" aria-selected="false"><svg><use href="#i-ledger"/></svg>Activity log</button>
         </div>
-      </div>
-      <div class="section">
-        <div class="section-head"><h2>Network events</h2>
-          <span class="aside">attempted egress and its outcome</span></div>
-        <div class="tw"><table>
-          <thead><tr><th>Result</th><th>Destination</th><th>Port</th><th>Layer</th>
-            <th>Process</th><th>Task</th><th>Detail</th><th>When</th></tr></thead>
-          <tbody id="netRows"></tbody></table></div>
-      </div>
-    </section>
 
-    <!-- ------------------------------------------------------------- audit -->
-    <section class="view" id="v-audit">
-      <div class="section">
-        <div class="section-head"><h2>Chain integrity</h2></div>
-        <div id="auditVerify"></div>
-      </div>
-      <div class="section">
-        <div class="section-head"><h2>Audit log</h2></div>
-        <div class="tw"><table>
-          <thead><tr><th>#</th><th>When</th><th>Category</th><th>Action</th>
-            <th>Outcome</th><th>Task</th><th>Detail</th></tr></thead>
-          <tbody id="auditRows"></tbody></table></div>
+        <!-- system -->
+        <div class="apane on" id="a-system">
+          <div class="gauges" id="gauges"></div>
+          <div class="cols">
+            <div>
+              <h2 class="h-sec">Running now</h2>
+              <div class="tw"><table>
+                <thead><tr><th>Chat</th><th>Priority</th><th>Model</th><th class="r">Steps</th></tr></thead>
+                <tbody id="runRows"></tbody></table></div>
+            </div>
+            <div>
+              <h2 class="h-sec">Waiting <span class="aside">priority rises the longer a run waits</span></h2>
+              <div class="tw"><table>
+                <thead><tr><th>Chat</th><th>Priority</th><th class="r">Effective</th><th>Why it is waiting</th></tr></thead>
+                <tbody id="queueRows"></tbody></table></div>
+            </div>
+          </div>
+          <h2 class="h-sec">Models in GPU memory
+            <button type="button" class="btn sm secondary" id="offloadBtn" title="Unload every model from GPU memory so the next run is routed on merit alone"><svg><use href="#i-down"/></svg>Unload all</button></h2>
+          <p class="note" id="residencyNote"></p>
+          <div id="residency"></div>
+          <div class="cols">
+            <div>
+              <h2 class="h-sec">Limits</h2>
+              <dl class="kv" id="limits"></dl>
+            </div>
+            <div>
+              <h2 class="h-sec">Admission decisions</h2>
+              <div class="tw"><table>
+                <thead><tr><th>Outcome</th><th>Chat</th><th>Model</th><th>Reason</th></tr></thead>
+                <tbody id="admissionRows"></tbody></table></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- models -->
+        <div class="apane" id="a-models">
+          <h2 class="h-sec">Registry</h2>
+          <div class="tw"><table>
+            <thead><tr><th>Model</th><th>Role</th><th class="r">Memory</th><th class="r">KV / 1k</th>
+              <th class="r">Load</th><th class="r">Speed</th><th>Status</th><th></th></tr></thead>
+            <tbody id="modelRows"></tbody></table></div>
+          <h2 class="h-sec">Capabilities <span class="aside">router scores, 0–1</span></h2>
+          <div class="tw"><table class="caps"><thead><tr id="capHead"></tr></thead>
+            <tbody id="capRows"></tbody></table></div>
+          <h2 class="h-sec">Hardware</h2>
+          <dl class="kv" id="hwProfile"></dl>
+        </div>
+
+        <!-- security -->
+        <div class="apane" id="a-security">
+          <div id="secHero"></div>
+          <h2 class="h-sec">Protection layers</h2>
+          <div class="layers" id="sovLayers"></div>
+          <h2 class="h-sec">Member devices <span class="aside">laptops attached to this node, what each may receive, and whether its log still checks out</span></h2>
+          <div class="layers" id="trustHealth"></div>
+          <div id="devSummary" class="dev-sum"></div>
+          <div class="tw"><table>
+            <thead><tr><th>Device</th><th>Owner</th><th>Grade</th><th>Lease</th>
+              <th>Log anchored</th><th>Status</th><th class="r"></th></tr></thead>
+            <tbody id="devRows"></tbody></table></div>
+          <h2 class="h-sec">Connection attempts <span class="aside">every attempt to reach outside, and what happened</span></h2>
+          <div class="tw"><table>
+            <thead><tr><th>Result</th><th>Destination</th><th class="r">Port</th><th>Layer</th>
+              <th>Process</th><th>Run</th><th>Detail</th><th class="r">When</th></tr></thead>
+            <tbody id="netRows"></tbody></table></div>
+        </div>
+
+        <!-- evidence -->
+        <div class="apane" id="a-evidence">
+          <div class="ev-legend">
+            <div><span class="ev a"><svg><use href="#i-docs"/></svg>Sourced</span><span>found in a cited document region</span></div>
+            <div><span class="ev b"><svg><use href="#i-calc"/></svg>Calculated</span><span>a reproducible calculation</span></div>
+            <div><span class="ev c"><svg><use href="#i-eye"/></svg>Judgement</span><span>a reading of the evidence</span></div>
+            <div><span class="ev d"><svg><use href="#i-x"/></svg>Not supported</span><span>refused rather than invented</span></div>
+          </div>
+          <h2 class="h-sec">Claims</h2>
+          <div class="tw"><table>
+            <thead><tr><th>Evidence</th><th>Value</th><th>Statement</th><th>Basis</th><th>Chat</th></tr></thead>
+            <tbody id="claimRows"></tbody></table></div>
+          <h2 class="h-sec">Calculations</h2>
+          <div class="tw"><table>
+            <thead><tr><th>ID</th><th>Quantity</th><th>Formula</th><th>Substitution</th>
+              <th>Result</th><th>Inputs</th></tr></thead>
+            <tbody id="calcRows"></tbody></table></div>
+        </div>
+
+        <!-- all runs -->
+        <div class="apane" id="a-tasks">
+          <div class="tw"><table>
+            <thead><tr><th>Run</th><th>Type</th><th>Priority</th><th>Status</th>
+              <th>Model</th><th class="r">Steps</th><th class="r">Waited</th><th class="r">Took</th></tr></thead>
+            <tbody id="taskRows"></tbody></table></div>
+        </div>
+
+        <!-- activity -->
+        <div class="apane" id="a-activity">
+          <div id="auditVerify"></div>
+          <div class="tw"><table>
+            <thead><tr><th class="r">#</th><th>When</th><th>Category</th><th>Action</th>
+              <th>Outcome</th><th>Run</th><th>Detail</th></tr></thead>
+            <tbody id="auditRows"></tbody></table></div>
+        </div>
       </div>
     </section>
 
     </main>
-    </div><!-- /scroll-inner -->
     </div><!-- /scroll -->
 
-    <!-- The composer lives outside the scroll surface so it stays put while the
-         conversation scrolls under it. Shown only on the conversation view. -->
+    <!-- The composer sits outside the scroll surface so it stays put. -->
     <div class="composer-wrap" id="composerWrap">
+      <button type="button" class="to-bottom" id="toBottom" hidden aria-label="Scroll to latest"><svg><use href="#i-car"/></svg></button>
       <form class="composer" id="composer" autocomplete="off">
-        <div class="attach-chip" id="attachChip" hidden></div>
-        <textarea id="prompt" rows="1"
-          placeholder="Ask the agent to do something. Attach a document if it needs one."></textarea>
+        <div class="attach" id="attachChip" hidden></div>
+        <textarea id="prompt" rows="1" aria-label="Message"
+          placeholder="Ask ClawCal to read, check, calculate or draft something…"></textarea>
         <div class="composer-bar">
-          <button type="button" class="icon-btn" id="attachBtn" aria-label="Attach a document"
-            title="Attach a document">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-              stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9.5 4 5.2 8.3a1.7 1.7 0 0 0 2.4 2.4l4.6-4.6a3 3 0 0 0-4.2-4.2L3.2 6.6a4.3 4.3 0 0 0 6 6L13 8.9"/>
-            </svg>
-          </button>
+          <button type="button" class="icon-btn" id="attachBtn" aria-label="Attach a file" title="Attach a file"><svg><use href="#i-clip"/></svg></button>
           <input type="file" id="file" hidden>
-          <select id="workflow" class="mini" aria-label="Workflow"></select>
-          <select id="priority" class="mini" aria-label="Priority">
-            <option value="">Auto priority</option>
-            <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option>
-            <option>LOW</option><option>BATCH</option>
-          </select>
-          <button type="button" class="btn sm" id="uploadBtn" hidden>Index only</button>
+
+          <div class="menu-wrap">
+            <button type="button" class="dd" id="modeBtn" aria-haspopup="true" aria-expanded="false">
+              <svg id="modeIcon"><use href="#i-hand"/></svg><span id="modeLbl">Ask first</span><svg class="car"><use href="#i-car"/></svg></button>
+            <div class="pop menu up" id="modeMenu" hidden role="menu" aria-label="Chat safety setting">
+              <div class="menu-h">Before ClawCal changes anything</div>
+              <button type="button" role="menuitemradio" data-mode="review"><span class="mi"><svg><use href="#i-hand"/></svg></span><span><b>Ask first</b><span>Checks with you before creating files or running code.</span></span></button>
+              <button type="button" role="menuitemradio" data-mode="trusted"><span class="mi"><svg><use href="#i-bolt"/></svg></span><span><b>Auto-run</b><span>Goes ahead and logs everything it does.</span></span></button>
+              <button type="button" role="menuitemradio" data-mode="locked"><span class="mi"><svg><use href="#i-lock"/></svg></span><span><b>Read only</b><span>Reads and answers. Never writes anything.</span></span></button>
+            </div>
+          </div>
+
+          <div class="menu-wrap">
+            <button type="button" class="dd" id="optsBtn" aria-haspopup="true" aria-expanded="false">
+              <svg><use href="#i-sliders"/></svg><span id="optsLbl">Auto</span><svg class="car"><use href="#i-car"/></svg></button>
+            <div class="pop menu up opts" id="optsMenu" hidden aria-label="Run options">
+              <div class="field">
+                <label for="model">Model</label>
+                <select id="model" class="input"><option value="">Auto — pick the best fit</option></select>
+              </div>
+              <div class="field">
+                <label for="priority">Priority</label>
+                <select id="priority" class="input">
+                  <option value="">Auto</option>
+                  <option value="CRITICAL">Urgent</option>
+                  <option value="HIGH">High</option>
+                  <option value="MEDIUM">Normal</option>
+                  <option value="LOW">Low</option>
+                  <option value="BATCH">When free</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="workflow">Kind of work</label>
+                <select id="workflow" class="input"></select>
+              </div>
+            </div>
+          </div>
+
+          <span class="ctx" id="ctxPill" hidden></span>
           <span class="grow"></span>
-          <button type="submit" class="send" id="submitBtn" aria-label="Send task" title="Send">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 12.5v-9M4 7.5 8 3.5l4 4"/>
-            </svg>
-          </button>
+          <button type="submit" class="send" id="submitBtn" aria-label="Send" title="Send (Enter)"><svg><use href="#i-up"/></svg></button>
         </div>
+        <div class="drop-hint" aria-hidden="true"><svg><use href="#i-upload"/></svg>Drop to attach</div>
       </form>
-      <div class="msg" id="submitMsg" role="status" aria-live="polite"></div>
+      <p class="composer-note" id="composerNote">Runs on this machine only. Check anything marked <b>Judgement</b>.</p>
     </div>
   </div><!-- /main -->
 </div><!-- /app -->
 
-<script src="/static/vendor/lenis.min.js"></script>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<dialog id="signIn" class="dlg signin">
+  <form method="dialog" id="signInForm">
+    <svg class="brand-mark lg"><use href="#logo"/></svg>
+    <h2>Sign in to ClawCal</h2>
+    <p>Enter the access key your administrator gave you. It is kept in this browser only.</p>
+    <div class="field">
+      <label for="tokenInput">Access key</label>
+      <input class="input mono" id="tokenInput" type="password" autocomplete="off" spellcheck="false">
+      <span class="hint">Owners: the first key is in <code>owner.token</code> in the workbench's data folder.</span>
+    </div>
+    <p class="form-err" id="signInMsg" role="alert"></p>
+    <button class="btn primary block" value="ok">Sign in</button>
+  </form>
+</dialog>
+
+<!-- Where an evidence tag points: the value, why it is classed that way, and
+     the source page with the cited region lit. -->
+<dialog id="evidenceView" class="dlg evidence-view">
+  <form method="dialog" class="dlg-x"><button class="icon-btn" aria-label="Close"><svg><use href="#i-x"/></svg></button></form>
+  <div id="evidenceBody"></div>
+</dialog>
+
 <script src="/static/js/app.js"></script>
 </body>
 </html>

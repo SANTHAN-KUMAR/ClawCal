@@ -81,8 +81,18 @@ def _fts_escape(q: str) -> str:
 
 
 def _doc_filter_sql(doc_ids: list[str] | None,
-                    doc_classes: list[str] | None) -> tuple[str, list[Any]]:
+                    doc_classes: list[str] | None,
+                    data_classes: list[str] | None = None) -> tuple[str, list[Any]]:
     clauses, params = [], []
+    # Clearance (the trust domain's data classes). An empty list clears
+    # nothing, which must match nothing — not fall through to "no filter".
+    if data_classes is not None:
+        if not data_classes:
+            clauses.append("0")
+        else:
+            clauses.append(f"COALESCE(d.data_class, 'internal') IN "
+                           f"({','.join('?' * len(data_classes))})")
+            params += data_classes
     if doc_ids:
         clauses.append(f"c.doc_id IN ({','.join('?' * len(doc_ids))})")
         params += doc_ids
@@ -93,11 +103,12 @@ def _doc_filter_sql(doc_ids: list[str] | None,
 
 
 def lexical_search(query: str, k: int, doc_ids: list[str] | None = None,
-                   doc_classes: list[str] | None = None) -> list[tuple[str, float]]:
+                   doc_classes: list[str] | None = None,
+                   data_classes: list[str] | None = None) -> list[tuple[str, float]]:
     match = _fts_escape(query)
     if not match:
         return []
-    where, params = _doc_filter_sql(doc_ids, doc_classes)
+    where, params = _doc_filter_sql(doc_ids, doc_classes, data_classes)
     sql = (
         "SELECT f.chunk_id AS cid, bm25(chunks_fts) AS rank "
         "FROM chunks_fts f JOIN chunks c ON c.id = f.chunk_id "
@@ -116,10 +127,11 @@ def lexical_search(query: str, k: int, doc_ids: list[str] | None = None,
 
 
 def dense_search(query: str, k: int, doc_ids: list[str] | None = None,
-                 doc_classes: list[str] | None = None) -> list[tuple[str, float]]:
+                 doc_classes: list[str] | None = None,
+                 data_classes: list[str] | None = None) -> list[tuple[str, float]]:
     if not embed.available():
         return []
-    where, params = _doc_filter_sql(doc_ids, doc_classes)
+    where, params = _doc_filter_sql(doc_ids, doc_classes, data_classes)
     rows = db.query(
         "SELECT c.id AS cid, c.embedding AS emb FROM chunks c "
         f"JOIN documents d ON d.id = c.doc_id WHERE c.embedding IS NOT NULL{where}",
@@ -151,13 +163,18 @@ def _hydrate(chunk_ids: list[str]) -> dict[str, Passage]:
 
 def search(query: str, *, k: int | None = None, doc_ids: list[str] | None = None,
            doc_classes: list[str] | None = None,
-           rerank: bool = False, model: str | None = None) -> list[Passage]:
-    """Retrieve evidence passages for a query."""
+           rerank: bool = False, model: str | None = None,
+           data_classes: list[str] | None = None) -> list[Passage]:
+    """Retrieve evidence passages for a query.
+
+    `data_classes` is the requester's clearance under the trust-domain policy;
+    None means unfiltered (the node's own console and internal callers).
+    """
     k = k or settings.knowledge.retrieve_k
     pool = max(k * 3, settings.knowledge.retrieve_k)
 
-    dense = dense_search(query, pool, doc_ids, doc_classes)
-    lexical = lexical_search(query, pool, doc_ids, doc_classes)
+    dense = dense_search(query, pool, doc_ids, doc_classes, data_classes)
+    lexical = lexical_search(query, pool, doc_ids, doc_classes, data_classes)
     if not dense and not embed.available():
         # Loud, once per query, rather than a silent halving of retrieval quality.
         from .. import audit

@@ -22,24 +22,14 @@ from typing import Any, Iterable
 
 from .. import db
 
-# Numbers that are structurally not claims: clause references, dates, document
-# numbers, page pointers, enumerations. Matching these as "unsupported facts"
-# would make the checker cry wolf until an operator switched it off.
-_IGNORE_CONTEXT = re.compile(
-    r"(clause|section|para(graph)?|rev(ision)?|page|p\.|item|step|note|table|"
-    r"figure|annex|appendix|sop-|ir-|psv/|no\.|ref|dwg|drawing)\s*[:\-]?\s*$",
-    re.I)
+# Numbers that are structurally not claims, and what counts as a number: shared
+# with the deliverable gate (and so with the client's offline gate).
+from .gatecore import _IGNORE_CONTEXT, _NUMBER  # noqa: E402
+
 _DATE_LIKE = re.compile(
     r"\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}\b|"
     r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b", re.I)
 _IDENT_LIKE = re.compile(r"\b[A-Z]{1,4}[-/]\d{2,6}(?:[-/][A-Z0-9]+)*\b")
-
-# A "significant" number: a decimal or integer, optionally with a unit.
-_NUMBER = re.compile(
-    r"(?<![\w.\-/])(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d*\.\d+|\d+)\s*"
-    r"(mm|cm|m|bar\s*g|bar|kpa|mpa|psi|deg\s*c|°c|c|years?|yrs?|months?|%|"
-    r"mm/yr|mm/year|kg|tonnes?|hours?)?(?!\w)(?!\.\d)",
-    re.I)
 
 UNITS_REQUIRING_PROOF = {
     "mm", "cm", "m", "bar", "bar g", "kpa", "mpa", "psi", "deg c", "°c",
@@ -134,15 +124,7 @@ def extract_numbers(text: str) -> list[NumberMention]:
     return out
 
 
-def _values_in(text: str) -> set[str]:
-    """All numeric values present in a body of text, normalised for comparison."""
-    vals = set()
-    for m in re.finditer(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d*\.\d+|\d+", text):
-        try:
-            vals.add(f"{float(m.group(0).replace(',', '')):g}")
-        except ValueError:
-            continue
-    return vals
+from .gatecore import _values_in  # noqa: E402,F811
 
 
 @dataclass
@@ -150,6 +132,10 @@ class EvidenceContext:
     """Everything the checker is allowed to treat as established."""
     passages: list[dict[str, Any]] = field(default_factory=list)
     calculations: list[dict[str, Any]] = field(default_factory=list)
+    # The documents the task is about. A number found only in some *other*
+    # document is not established for this task: it was read from a source the
+    # answer's reader did not attach, and is recorded as interpretation.
+    working_set: set[str] = field(default_factory=set)
 
     def source_index(self) -> dict[str, list[dict[str, Any]]]:
         idx: dict[str, list[dict[str, Any]]] = {}
@@ -226,6 +212,17 @@ def classify_text(text: str, ctx: EvidenceContext, *,
                 mention, "D",
                 f"produced by a calculation whose inputs were not established by "
                 f"any source: {', '.join(sorted(set(tainted[key])))[:160]}"))
+            continue
+
+        if key in src and ctx.working_set and not any(
+                h.get("doc_id") in ctx.working_set for h in src[key]):
+            other = "; ".join(sorted({str(h.get("doc_title") or h.get("doc_id"))
+                                      for h in src[key][:3]}))
+            verdicts.append(Verdict(
+                mention, "C",
+                f"present only in {other}, which is not among the documents attached "
+                f"to this task; confirm the source before relying on it",
+                evidence_ids=[h.get("chunk_id", "") for h in src[key][:3]]))
             continue
 
         if key in src:

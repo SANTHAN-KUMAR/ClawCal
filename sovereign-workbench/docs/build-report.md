@@ -211,6 +211,113 @@ have helped anyone who had already tried the file once.
 
 ---
 
+---
+
+## v2 build: defects found against real inputs and real conditions
+
+The v1 defects above were found by running the system. These were found by
+running it on documents and hardware nobody on the project controlled: the
+held-out dirty corpus (`scripts/fetch_dirty_corpus.py`), a desktop already
+using 10 of its 16 GB of RAM, and a cloud deployment as the target.
+
+**The machine was taken down by the OOM killer, twice.** A sovereignty
+self-test (a workflow that uses no model at all) was routed to the 12 GB
+`gpt-oss-20b`. The residency plan compared only the model's measured *VRAM
+share* (7.2 GB) with free VRAM, and concluded it "fits without evicting
+anything". The other 5 GB went to host RAM on a machine with 5.7 GB available,
+and systemd-oomd killed the browser and then the desktop. Three fixes followed:
+model-free workflows no longer route; admission prices the host-RAM spill
+against available RAM minus a reserve; and the gateway applies the same check
+to every model load, including those made from inside tools.
+
+**…and the first memory guard was still wrong.** It budgeted only the part of
+a model that spills beyond VRAM. A third OOM, during the live scenarios, showed
+why that is not enough: Ollama loaded every model with `UseMmap:false`,
+reading the whole weights file into host RAM before copying it to the GPU. So
+`qwen3-8b` (5.4 GB, entirely in VRAM once loaded) briefly needed about 5.4 GB
+of RAM on a host with 4.0 GB free and swap exhausted. It killed a process of
+the user's IDE. The guard now budgets that load-time peak, and refuses any load
+while the kernel reports memory stalls (PSI) or swap is under 5% free. On this
+workstation, with its normal workload, that means `qwen3-4b` and
+`granite3.2-vision-2b` load and the 8B models wait for memory, which is the
+truth about this machine. Text-model fallbacks also no longer try vision
+models, which had turned a failed step into a series of pointless loads.
+
+**The injection scanner caught 0% of a public held-out injection set.** It
+matched a handful of exact sentences. Rewritten as classes of attacker move —
+override, address to the model, delimiter spoofing, finding suppression,
+audit destruction, value dictation, OCR-tolerant exfiltration — it catches 17%
+of the unseen half of `deepset/prompt-injections` with 0 false positives, and
+12 of 12 document injections in the dirty corpus. The residual gap, free-form
+chatbot jailbreaks, is not closable with patterns. This is why detection is a
+signal and the tool policy and egress layers are the guarantee.
+
+**The OCR thresholds were wrong in both directions.** On 21 real FUNSD scans,
+pages read at 45–69% mean confidence (which the v1 page threshold of 45
+accepted) mostly recovered under half their words. A fax-quality page at 54%
+recovered 7%. A photographed receipt read at 89% confidence had two thirds of
+its values wrong, so no threshold makes OCR on camera images trustworthy.
+Pages now need 70% (measured), and OCR on an image is ESTABLISHED only when an
+independent VLM reading agrees with it, words and numbers. Otherwise the VLM's
+reading is used, labelled INTERPRETED.
+
+**The first VLM returned nothing on every dense page.** `qwen3-vl:8b` is the
+*Thinking* build. It ignores `think: false`, and on a full form it spent its
+whole token budget reasoning and emitted no answer. After three such failures
+the circuit breaker, correctly, disabled it for the rest of the run: an entire
+evaluation scoring zero with no error visible in the results. The registry now
+names `qwen3-vl:8b-instruct`, and a thinking-only reply is reported as such.
+
+**A backend memory refusal was treated as a broken model.** Ollama refuses
+Qwen2.5-VL on this host ("requires 10.3 GiB, 10.2 available") because its
+vision encoder's working memory dwarfs its 6 GB of weights. The gateway
+charged that to the circuit breaker and discarded the number. It now records
+the backend's figure as a measured footprint, and refuses the next attempt
+before it reaches the backend.
+
+**A table was still read as a plant, on the vector path.** The page-level "is
+this a drawing" test existed only for raster input. A vector PDF of the ISA
+instrument-letter chart went straight to symbol extraction: 147 symbols. Its
+vector content is 588 rectangles and no curves; that signal, plus
+grid-alignment on the rendered page, now refuses it. Every real drawing is
+unaffected.
+
+**A clean install would have crashed on the first tool call.** New columns
+were added only through the migration list, which runs *before* the schema
+creates the tables. On a fresh database, which is every cloud install, those
+columns never existed.
+
+**The firewall script would have locked an administrator out of a cloud VM.**
+Its input chain dropped every new inbound connection, SSH included, and its
+output chain dropped DHCP renewals. It now admits SSH and service ports,
+DHCP, NDP and configured NTP; blocks and names the metadata endpoint; and over
+SSH applies with an automatic rollback. The ruleset was loaded and exercised in
+an unprivileged network namespace, where disallowed UDP was refused by the
+ruleset and the drop counter recorded it.
+
+**`generate_spreadsheet` never checked its numbers.** Every other document
+generator refused unsupported values; a table of rows went straight into a
+workbook. A number refused in an approval note could be delivered in a
+spreadsheet instead.
+
+**Upload ran OCR on the event loop.** An `async` route called ingestion
+synchronously, freezing every other request and the live stream for the
+length of a scan. The body was also read whole into memory with no limit.
+
+**`/api/drawings/analyse` opened any path on the host.** It is now confined to
+the corpus and the appliance's own data.
+
+**Registry sync reset administrator edits on every start,** and a family-name
+match let `qwen3:32b` being served enable the unrelated `qwen3-8b` card.
+
+**The sovereignty report said PASS while the host firewall was unverified.**
+The verdict now carries the qualification ("PASS, DEGRADED — … unverified").
+A sandbox probe that failed to run no longer counts as "all blocked". The
+firewall's state is reported as "could not be read without root", not as "NOT
+loaded".
+
+---
+
 ## Honest limits
 
 * Raster drawings give equipment inventory, not connectivity. The system reports

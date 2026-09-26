@@ -53,7 +53,24 @@ def analyse_pdf(path: str | Path, *, page_no: int = 1, title: str = "",
             str(img_path))
 
         if _has_vector_geometry(page):
-            extracted = vector.extract(page)
+            # The same "is this a drawing at all" test the raster path applies.
+            # Without it a vector page of tables — the ISA instrument-letter
+            # chart — went straight to symbol extraction and came back as a
+            # plant of 147 symbols. The text layer gives an exact word count.
+            assessment = _assess_rendered(img_path, len(page.get_text("words")))
+            geometry = _vector_geometry_profile(page)
+            assessment["vector_geometry"] = geometry
+            if geometry["looks_tabular"] and assessment["is_drawing"]:
+                assessment["is_drawing"] = False
+                assessment["reason"] = geometry["reason"]
+            if not assessment["is_drawing"]:
+                from .model import BBox
+                extracted = {"symbols": [], "lines": [], "tags": [],
+                             "page_box": BBox(0, 0, rect.width, rect.height),
+                             "assessment": assessment, "rejected": True}
+            else:
+                extracted = vector.extract(page)
+                extracted.setdefault("assessment", assessment)
             source_kind = "vector"
         else:
             extracted = raster.extract(img_path, scale=RENDER_SCALE)
@@ -63,6 +80,38 @@ def analyse_pdf(path: str | Path, *, page_no: int = 1, title: str = "",
 
     return _assemble(did, title or path.stem, source_kind, rect.width, rect.height,
                      str(img_path), extracted, use_vlm=use_vlm, task_id=task_id)
+
+
+def _vector_geometry_profile(page: Any) -> dict[str, Any]:
+    """What the vector content is made of.
+
+    A P&ID is line work and curves: pipes, instrument balloons, valve bodies. A
+    table is ruled rectangles and nothing else. The ISA letter chart drew 588
+    rectangles and not one line or curve.
+    """
+    from collections import Counter
+    kinds: Counter = Counter()
+    for d in page.get_drawings():
+        for it in d.get("items", []):
+            kinds[it[0]] += 1
+    total = sum(kinds.values())
+    rect_frac = (kinds["re"] + kinds["qu"]) / total if total else 0.0
+    curves = kinds["c"]
+    looks = total >= 20 and rect_frac >= 0.9 and curves <= 2
+    return {"items": dict(kinds), "rect_fraction": round(rect_frac, 3),
+            "looks_tabular": looks,
+            "reason": (f"the vector content is {rect_frac:.0%} ruled rectangles "
+                       f"({total} items, {curves} curves): a table, not line work"
+                       if looks else "")}
+
+
+def _assess_rendered(img_path: Path, word_count: int) -> dict[str, Any]:
+    import cv2
+    img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return {"is_drawing": True, "reason": "page render unreadable; not assessed"}
+    binary = raster._binarise(img)
+    return raster.assess_page(binary, binary, word_count)
 
 
 def analyse_cad(path: str | Path, *, title: str = "",

@@ -26,8 +26,9 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-from .. import db
+from .. import audit, db
 from ..config import ARTIFACT_DIR, settings
+from . import templates
 
 ACCENT = RGBColor(0x1F, 0x3A, 0x5F)
 MUTED = RGBColor(0x55, 0x5F, 0x6B)
@@ -164,10 +165,41 @@ def _value_table(doc: Document, rows: list[dict[str, Any]],
         cells = t.add_row().cells
         for i, key in enumerate(("parameter", "value", "unit", "source")):
             if i < len(headers):
+                if key == "source" and row.get("link"):
+                    # A figure that links back to the page and region it was
+                    # read from: the span id made clickable.
+                    _hyperlink(cells[i].paragraphs[0], str(row["link"]),
+                               str(row.get(key, "")))
+                    continue
                 cells[i].text = str(row.get(key, ""))
                 for p in cells[i].paragraphs:
                     for r in p.runs:
                         r.font.size = Pt(9)
+
+
+def _hyperlink(paragraph: Any, url: str, text: str) -> None:
+    """An external hyperlink run (python-docx has no public API for one)."""
+    part = paragraph.part
+    rid = part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/"
+                              "2006/relationships/hyperlink", is_external=True)
+    link = OxmlElement("w:hyperlink")
+    link.set(qn("r:id"), rid)
+    run = OxmlElement("w:r")
+    props = OxmlElement("w:rPr")
+    colour = OxmlElement("w:color")
+    colour.set(qn("w:val"), "1F5FAF")
+    under = OxmlElement("w:u")
+    under.set(qn("w:val"), "single")
+    size = OxmlElement("w:sz")
+    size.set(qn("w:val"), "18")
+    props.extend([colour, under, size])
+    run.append(props)
+    t = OxmlElement("w:t")
+    t.text = text
+    t.set(qn("xml:space"), "preserve")
+    run.append(t)
+    link.append(run)
+    paragraph._p.append(link)
 
 
 def _signature_block(doc: Document, data: ApprovalNoteData) -> None:
@@ -198,6 +230,38 @@ def _footer(doc: Document, ref: str) -> None:
         f"Retain per SOP-MECH-014 clause 7.1")
     r.font.size = Pt(7.5)
     r.font.color.rgb = MUTED
+    # The audit chain head at the moment of writing: a reader can tie this file
+    # to the record it was produced under without opening the workbench.
+    h = section.footer.add_paragraph()
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    hr = h.add_run(f"audit chain head {audit.head()[:32]}")
+    hr.font.size = Pt(6.5)
+    hr.font.color.rgb = MUTED
+
+
+def _begin(kind: str) -> tuple[Any, dict[str, Any], "templates.BodyAnchor"]:
+    """The organisation's template, or the built-in layout."""
+    doc, info = templates.base_document(kind)
+    if not info.get("template") or info.get("rejected"):
+        _styles(doc)
+    return doc, info, templates.BodyAnchor(doc)
+
+
+def _finish(doc: Any, info: dict[str, Any], anchor: "templates.BodyAnchor",
+            ref: str, values: dict[str, str]) -> None:
+    head = audit.head()
+    if info.get("template") and not info.get("rejected"):
+        anchor.place()
+        templates.fill(doc, {"org_name": settings.org_name,
+                             "org_unit": settings.org_unit, "reference_no": ref,
+                             "date": time.strftime("%d %B %Y"), "audit_head": head,
+                             **values})
+    else:
+        _footer(doc, ref)
+    doc.core_properties.keywords = f"clawcal audit-head {head}"
+    doc.core_properties.comments = (
+        "Draft produced by ClawCal for an engineer's review and signature. "
+        f"Audit chain head at generation: {head}")
 
 
 CLASS_LABEL = {"A": "SOURCE", "B": "DERIVED", "C": "INTERPRETATION",
@@ -206,17 +270,17 @@ CLASS_LABEL = {"A": "SOURCE", "B": "DERIVED", "C": "INTERPRETATION",
 
 def build_approval_note(data: ApprovalNoteData, *, task_id: str | None = None,
                         filename: str | None = None) -> dict[str, Any]:
-    doc = Document()
-    _styles(doc)
-    sec = doc.sections[0]
-    sec.top_margin = Inches(0.7)
-    sec.bottom_margin = Inches(0.7)
-    sec.left_margin = Inches(0.85)
-    sec.right_margin = Inches(0.85)
-
+    doc, tinfo, anchor = _begin("approval_note")
+    templated = bool(tinfo.get("template")) and not tinfo.get("rejected")
     ref = data.reference_no or f"AN/{time.strftime('%Y')}/{db.new_id('')[1:6].upper()}"
     date_str = time.strftime("%d %B %Y")
-    _letterhead(doc, ref, date_str)
+    if not templated:
+        sec = doc.sections[0]
+        sec.top_margin = Inches(0.7)
+        sec.bottom_margin = Inches(0.7)
+        sec.left_margin = Inches(0.85)
+        sec.right_margin = Inches(0.85)
+        _letterhead(doc, ref, date_str)
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -377,14 +441,19 @@ def build_approval_note(data: ApprovalNoteData, *, task_id: str | None = None,
                     f"{e.get('doc_title', 'document')}, page {e.get('page_no', '?')}: "
                     f"“{(e.get('text') or '')[:400].strip()}”")
 
-    _footer(doc, ref)
+    _finish(doc, tinfo, anchor, ref,
+            {"subject": data.subject, "title": "Approval note",
+             "equipment_tag": data.equipment_tag, "prepared_by": data.prepared_by})
 
     out = ARTIFACT_DIR / (filename or f"approval_note_{ref.replace('/', '-')}.docx")
     doc.save(str(out))
     return _register(out, task_id, "approval_note",
                      {"reference_no": ref, "subject": data.subject,
                       "equipment_tag": data.equipment_tag,
-                      "unresolved": len(data.unresolved)})
+                      "unresolved": len(data.unresolved),
+                      "template": tinfo.get("template"),
+                      "template_rejected": tinfo.get("rejected"),
+                      "audit_head": audit.head()})
 
 
 def build_report(title: str, sections: list[dict[str, Any]], *,
@@ -392,10 +461,11 @@ def build_report(title: str, sections: list[dict[str, Any]], *,
                  filename: str | None = None,
                  subtitle: str = "") -> dict[str, Any]:
     """A general internal report / memo on the same letterhead."""
-    doc = Document()
-    _styles(doc)
+    doc, tinfo, anchor = _begin("report")
+    templated = bool(tinfo.get("template")) and not tinfo.get("rejected")
     ref = f"MEMO/{time.strftime('%Y')}/{db.new_id('')[1:6].upper()}"
-    _letterhead(doc, ref, time.strftime("%d %B %Y"))
+    if not templated:
+        _letterhead(doc, ref, time.strftime("%d %B %Y"))
 
     h = doc.add_paragraph()
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -424,10 +494,12 @@ def build_report(title: str, sections: list[dict[str, Any]], *,
             _value_table(doc, sec["table"],
                          tuple(sec.get("headers",
                                        ("Parameter", "Value", "Unit", "Source"))))
-    _footer(doc, ref)
+    _finish(doc, tinfo, anchor, ref, {"title": title, "subject": subtitle or title})
     out = ARTIFACT_DIR / (filename or f"report_{ref.replace('/', '-')}.docx")
     doc.save(str(out))
-    return _register(out, task_id, "report", {"title": title, "reference_no": ref})
+    return _register(out, task_id, "report", {"title": title, "reference_no": ref,
+                                              "template": tinfo.get("template"),
+                                              "audit_head": audit.head()})
 
 
 def _register(path: Path, task_id: str | None, kind: str,

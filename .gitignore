@@ -69,3 +69,9 @@ Thumbs.db
 *.pem
 *.key
 credentials.json
+
+# ---------------------------------------------------------------- local toolchains
+# llama.cpp release, bun, the opencode source tree and its build, swtpm: fetched
+# or built on the workstation (several GB), reproduced by bundle/opencode/build.sh.
+/tools/
+__pycache__/

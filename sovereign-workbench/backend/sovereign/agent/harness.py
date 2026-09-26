@@ -194,7 +194,10 @@ class AgentHarness:
     def run(self, resume: dict[str, Any] | None = None) -> AgentResult:
         state = AgentState.from_dict(resume)
         tool_ctx = ToolContext(task_id=self.task["id"], workspace=self.workspace,
-                               emit=self.ctl.emit, scratch=state.scratch)
+                               emit=self.ctl.emit, scratch=state.scratch,
+                               principal=self.task.get("owner") or "system",
+                               should_stop=lambda: self.ctl.cancelled,
+                               session_id=self.task.get("conversation_id"))
         tool_ctx.scratch.setdefault(
             "attachments", db.jload(self.task.get("attachments"), []) or [])
 
@@ -259,34 +262,62 @@ class AgentHarness:
                 self.ctl.emit("reasoning", f"Step {state.step} reasoning",
                               res.reasoning[:1500])
 
-            if res.tool_calls:
-                call = res.tool_calls[0]
+            calls = res.tool_calls
+            if not calls and int(state.scratch.get("recovered_calls", 0)) < 2:
+                # A weaker model often *describes* the call it means to make —
+                # "1. spreadsheet_read with {...}" — and stops. That is an
+                # unparsed tool call, not a final answer; taken as final, the
+                # user receives a plan instead of a result. Recover it, at most
+                # twice per task, and say so in the trace.
+                recovered = recover_prose_call(res.text, self.tools, self.allowed)
+                if recovered:
+                    state.scratch["recovered_calls"] = \
+                        int(state.scratch.get("recovered_calls", 0)) + 1
+                    self.ctl.emit("tool_call_recovered",
+                                  f"Recovered a described call to {recovered['name']}",
+                                  "the model wrote the call as text instead of making "
+                                  "it; the harness made it", recovered)
+                    calls = [recovered]
+            if calls:
+                call = calls[0]
                 name = str(call.get("name", ""))
                 cargs = call.get("arguments") or {}
                 self.ctl.emit("tool_call", f"Calling {name}",
                               db.jdump(cargs)[:600], {"tool": name, "args": cargs})
 
-                # Repetition guard. A model that gets an unhelpful error often
-                # retries the identical call indefinitely, burning the step
-                # budget without changing anything. Detect it and say so
-                # explicitly rather than letting the trajectory spin.
+                # Loop detection (§6.4). An identical call immediately after
+                # itself cannot return anything new, so it is not run: the step
+                # ends with CANNOT DETERMINE and the reason. A second strike ends
+                # the trajectory rather than burning the rest of the step budget.
+                # Only *consecutive* repeats count — re-reading a page after
+                # compaction dropped it is legitimate, and the compaction header
+                # tells the model to do exactly that.
                 signature = f"{name}:{db.jdump(cargs)}"
-                history = state.scratch.setdefault("call_signatures", [])
-                repeats = history.count(signature)
-                history.append(signature)
-                if repeats >= 1:
+                previous = state.scratch.get("last_call_signature")
+                state.scratch["last_call_signature"] = signature
+                if signature == previous:
+                    strikes = int(state.scratch.get("loop_strikes", 0)) + 1
+                    state.scratch["loop_strikes"] = strikes
                     self.ctl.emit("loop_detected", f"Repeated call to {name}",
-                                  f"identical arguments seen {repeats + 1} times")
+                                  "identical to the previous call; not re-run",
+                                  {"tool": name, "outcome": "CANNOT_DETERMINE",
+                                   "strikes": strikes})
+                    if res.text.strip():
+                        state.messages.append({"role": "assistant",
+                                               "content": res.text.strip()})
                     state.messages.append({
-                        "role": "user",
+                        "role": "tool", "name": name,
                         "content": (
-                            f"You have already called `{name}` with these exact "
-                            f"arguments {repeats + 1} times and received the same "
-                            f"result. Repeating it will not change the "
-                            f"outcome. Either change the arguments materially, "
-                            f"use a different tool, or give your final answer "
-                            f"recording what you could not establish as "
-                            f"CANNOT DETERMINE.")})
+                            f"Result of {name}:\n[OUTCOME: CANNOT DETERMINE — this "
+                            f"call is identical to the one you just made, so it "
+                            f"was not run again; its result above is unchanged.] "
+                            f"Change the arguments materially, use a different "
+                            f"tool, or give your final answer recording what "
+                            f"could not be established as CANNOT DETERMINE.")})
+                    if strikes >= 2:
+                        stopped = (f"loop detected: {name} was called with "
+                                   f"identical arguments repeatedly")
+                        break
                     continue
 
                 result = self.tools.invoke(name, cargs, tool_ctx,
@@ -295,7 +326,9 @@ class AgentHarness:
                 observation = result.for_model(OBSERVATION_LIMIT)
                 self.ctl.emit("observation", f"{name} -> "
                                              f"{'ok' if result.ok else 'error'}",
-                              (result.display or observation)[:900])
+                              (result.display or observation)[:900],
+                              {"tool": name, "outcome": result.outcome,
+                               "outcome_reason": result.outcome_reason[:300]})
 
                 if res.text.strip():
                     state.messages.append({"role": "assistant",
@@ -410,6 +443,16 @@ class AgentHarness:
                     "Use trace_drawing_connection to answer questions about "
                     "specific pairs of tags.",
                 ]
+            elif first.get("kind") == "spreadsheet" or str(
+                    first.get("title", "")).lower().endswith((".xlsx", ".xlsm")):
+                lines += [
+                    f'  spreadsheet_read with {{"action": "sheets", "workbook": "{ref}"}}',
+                    "",
+                    "then read the relevant range with action \"read\". Cells "
+                    "you read are citable source values. To add a derived "
+                    "column, use spreadsheet_edit and write FORMULAS over the "
+                    "source cells, not numbers you computed yourself.",
+                ]
             else:
                 lines.append(
                     f'  read_document_page with {{"doc_id": "{ref}", "page_no": 1}}')
@@ -478,6 +521,75 @@ class AgentHarness:
         return ("CANNOT DETERMINE - the agent did not reach a conclusion and the "
                 "final summarisation attempt also failed. The tool results "
                 "recorded in the trace are the only established facts.")
+
+
+def _json_objects(text: str) -> list[tuple[int, Any]]:
+    """Every top-level JSON object in free text, with its start offset."""
+    import json
+    out, i = [], 0
+    while True:
+        i = text.find("{", i)
+        if i < 0:
+            return out
+        depth, j, in_str, esc = 0, i, False, False
+        while j < len(text):
+            ch = text[j]
+            if in_str:
+                esc = (ch == "\\" and not esc)
+                if ch == '"' and not esc:
+                    in_str = False
+                if ch != "\\":
+                    esc = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        out.append((i, json.loads(text[i:j + 1])))
+                    except ValueError:
+                        pass
+                    break
+            j += 1
+        i = j + 1
+
+
+def recover_prose_call(text: str, tools: Any, allowed: set[str]) -> dict[str, Any] | None:
+    """A tool call the model wrote as text, if one can be read unambiguously.
+
+    Two shapes are recognised: an allowed tool's name followed by a JSON object
+    of arguments, and a bare JSON object whose keys fit exactly one allowed
+    tool's schema. Anything ambiguous is left alone: guessing a call is worse
+    than asking the model again.
+    """
+    if not text or "{" not in text:
+        return None
+    objs = [(pos, o) for pos, o in _json_objects(text) if isinstance(o, dict) and o]
+    if not objs:
+        return None
+    names = sorted((n for n in allowed if tools.get(n)), key=len, reverse=True)
+    for pos, obj in objs:
+        before = text[max(0, pos - 90):pos]
+        named = [n for n in names if re.search(rf"\b{re.escape(n)}\b", before)]
+        if named:
+            name = max(named, key=lambda n: before.rfind(n))
+            args = obj.get("arguments", obj) if isinstance(obj.get("arguments"), dict) \
+                else obj
+            return {"name": name, "arguments": args}
+    fits = []
+    obj = objs[0][1]
+    for n in names:
+        schema = tools.get(n).parameters or {}
+        props = set((schema.get("properties") or {}).keys())
+        req = set(schema.get("required") or [])
+        keys = set(obj.keys())
+        if req and req <= keys <= props:
+            fits.append(n)
+    if len(fits) == 1:
+        return {"name": fits[0], "arguments": obj}
+    return None
 
 
 def run_agent(task: dict[str, Any], ctl: TaskControl,

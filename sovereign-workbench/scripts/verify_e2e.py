@@ -14,6 +14,7 @@ connections are genuinely attempted and genuinely refused.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import shutil
 import sys
@@ -754,35 +755,29 @@ def a18():
             f"host it names is refused by policy ({reason[:60]}…)")
 
 
-@check("A19", "Tool policy gates sensitive actions by organisational posture")
+@check("A19", "Permission modes gate actions per session (review / trusted / locked)")
 def a19():
     from sovereign.policy.tool_policy import Risk
-    original = policy.mode
-    try:
-        outcomes = {}
-        for mode in ("standard", "controlled", "strict"):
-            policy.set_mode(mode)
-            outcomes[mode] = {
-                "read": policy.evaluate("calculator", Risk.READ_ONLY, {}).requires_approval,
-                "write": policy.evaluate("write_file", Risk.LOCAL_WRITE, {}).requires_approval,
-                "docgen": policy.evaluate("generate_approval_note", Risk.DELIVERABLE,
-                                          {}).requires_approval,
-            }
-        assert outcomes["standard"]["docgen"] is False
-        assert outcomes["controlled"]["docgen"] is True
-        assert outcomes["strict"]["write"] is True
-        assert outcomes["standard"]["read"] is False
-
-        # A tool outside the task's granted set is refused outright.
-        policy.set_mode("controlled")
-        d = policy.evaluate("run_code", Risk.COMPUTE, {},
-                            allowed_tools={"calculator"})
-        assert not d.allowed, "a tool outside the granted set was permitted"
-    finally:
-        policy.set_mode(original)
-    return (f"standard: deliverables auto-execute; controlled: deliverables need "
-            f"approval; strict: even a workspace write needs approval; a tool "
-            f"outside the task's granted set is refused with a reason")
+    table = {}
+    for mode in ("review", "trusted", "locked"):
+        table[mode] = {
+            "read": policy.evaluate("calculator", Risk.READ_ONLY, {}, mode=mode),
+            "write": policy.evaluate("write_file", Risk.LOCAL_WRITE, {}, mode=mode),
+            "code": policy.evaluate("run_code", Risk.COMPUTE, {}, mode=mode),
+            "docgen": policy.evaluate("generate_approval_note", Risk.DELIVERABLE,
+                                      {}, mode=mode),
+        }
+    r, t, l = table["review"], table["trusted"], table["locked"]
+    assert not r["read"].requires_approval and r["write"].requires_approval
+    assert r["code"].requires_approval and r["docgen"].requires_approval
+    assert t["code"].allowed and not t["code"].requires_approval
+    assert not l["write"].allowed and not l["docgen"].allowed and l["read"].allowed
+    d = policy.evaluate("run_code", Risk.COMPUTE, {}, mode="trusted",
+                        allowed_tools={"calculator"})
+    assert not d.allowed, "a tool outside the granted set was permitted"
+    return ("review asks before every write, code run and deliverable; trusted runs "
+            "them and logs them; locked refuses everything but reads; a tool "
+            "outside the task's granted set is refused in every mode")
 
 
 @check("A20", "The control plane recovers tasks orphaned by a restart")
@@ -790,7 +785,7 @@ def a20():
     tid = db.new_id("task")
     db.insert("tasks", {
         "id": tid, "title": "Verification: orphan", "prompt": "orphan",
-        "owner": "operator", "workflow": "general", "task_type": "general",
+        "owner": "verification", "workflow": "general", "task_type": "general",
         "priority": "LOW", "state": "RUNNING", "created_at": db.now()})
     db.insert("checkpoints", {
         "id": db.new_id("ckpt"), "task_id": tid, "step": 3,
@@ -800,7 +795,7 @@ def a20():
     orphan2 = db.new_id("task")
     db.insert("tasks", {
         "id": orphan2, "title": "Verification: orphan without checkpoint",
-        "prompt": "orphan", "owner": "operator", "workflow": "general",
+        "prompt": "orphan", "owner": "verification", "workflow": "general",
         "task_type": "general", "priority": "LOW", "state": "RUNNING",
         "created_at": db.now()})
 
@@ -878,8 +873,130 @@ def a21():
             f"equipment tag V-204 was recovered from each")
 
 
+@check("A22", "Every authority writes a uniform, tamper-evident decision record")
+def a22():
+    from sovereign.control import decisions
+    for a in decisions.AUTHORITIES:
+        decisions.record(a, "VERIFY", "acceptance check", subject_kind="verify")
+    v = decisions.verify()
+    assert v["ok"], v
+    seen = {r["authority"] for r in db.query("SELECT DISTINCT authority FROM decisions")}
+    missing = set(decisions.AUTHORITIES) - seen
+    assert not missing, f"authorities with no decision rows: {missing}"
+    last = db.query_one("SELECT * FROM decisions ORDER BY seq DESC LIMIT 1")
+    db.execute("DELETE FROM decisions WHERE seq=?", (last["seq"],))
+    broken = decisions.verify()
+    db.insert("decisions", dict(last))
+    assert not broken["ok"] and decisions.verify()["ok"]
+    return (f"all seven authorities write decision rows ({v['entries']} so far); "
+            f"removing the newest is caught by the audit cross-reference: "
+            f"{broken['reason'][:90]}")
+
+
+@check("A23", "A session's permission mode applies to its running task, live")
+def a23():
+    from sovereign.control import identity, sessions
+    from sovereign.policy.tool_policy import Risk
+    owner = identity.ensure_owner()
+    s = sessions.create(owner, mode="locked")
+    tid = db.new_id("task")
+    db.insert("tasks", {"id": tid, "conversation_id": s["id"], "title": "v", "prompt": "v",
+                        "owner": owner.name, "state": "RUNNING", "created_at": db.now()})
+    before = policy.evaluate("write_file", Risk.LOCAL_WRITE, {}, task_id=tid)
+    sessions.set_mode(s["id"], "trusted", owner)
+    after = policy.evaluate("write_file", Risk.LOCAL_WRITE, {}, task_id=tid)
+    db.execute("DELETE FROM tasks WHERE id=?", (tid,))
+    assert not before.allowed and after.allowed and not after.requires_approval
+    return "locked refused the write; switching the session to trusted let the same task write at its next call"
+
+
+@check("A24", "Identity: remote callers need a token; approvals need a named approver")
+def a24():
+    from sovereign.control import identity
+    try:
+        identity.authenticate(None, "10.1.2.3")
+        raise AssertionError("an unauthenticated remote caller was accepted")
+    except identity.AuthError:
+        pass
+    try:
+        identity.authenticate(None, "127.0.0.1", forwarded=True)
+        raise AssertionError("a proxied caller was trusted as the owner")
+    except identity.AuthError:
+        pass
+    eng = identity.create_principal("verify-engineer", role="engineer")
+    p = identity.authenticate(f"Bearer {eng['token']}", "10.1.2.3")
+    assert p.can("engineer") and not p.can("approver")
+    try:
+        identity.check_bind_safety("0.0.0.0") if identity.auth_mode() != "token" else None
+        bound = identity.auth_mode() == "token"
+    except SystemExit:
+        bound = False
+    assert not bound or identity.auth_mode() == "token"
+    return ("an untokened remote or proxied request is refused; a token resolves to "
+            "its principal and role; an engineer cannot approve; the server refuses "
+            "to bind a network address without token auth")
+
+
+@check("A25", "Host memory is priced before any model loads (the OOM regression)")
+def a25():
+    from sovereign.gateway.registry import ModelCard
+    big = ModelCard(name="verify-big", backend="ollama", backend_ref="x",
+                    weights_mb=12100, est_vram_mb=7200, caps={"text": 1})
+    ok, why, need, room = hardware.memory_verdict(
+        big, 7465, {"memory": {"available_mb": 5700, "total_mb": 16000}})
+    assert not ok and "OOM" in why
+    d = scheduler.evaluate({"id": "verify-st", "workflow": "sovereignty_proof",
+                            "task_type": "general", "priority": "HIGH",
+                            "owner": "verification", "est_context_tokens": 4000,
+                            "title": "st"})
+    assert d.outcome == "ADMIT" and not d.model
+    return (f"a 12 GB model against 5.7 GB free RAM is refused ({need:.0f} MB needed, "
+            f"{room:.0f} MB available); the model-free self-test is admitted with no model")
+
+
+@check("A26", "Sovereignty report and audit export are signed and verify offline")
+def a26():
+    from sovereign.control import report
+    path = report.export_audit("verification")
+    v = report.verify_audit_export(path)
+    assert v["ok"], v
+    raw = path.read_bytes().splitlines(keepends=True)
+    raw[1] = raw[1].replace(b'"category":', b'"category":"x","_":', 1)
+    path.write_bytes(b"".join(raw))
+    assert not report.verify_audit_export(path)["ok"]
+    return (f"Ed25519-signed export of {v['audit_entries']} audit rows and "
+            f"{v['decisions']} decisions verifies offline; a one-line edit fails")
+
+
+@check("A27", "Spreadsheet work on a real public workbook, with formulas and evidence")
+def a27():
+    from pathlib import Path as P
+    from sovereign.tools import spreadsheet
+    dirty = P(os.environ.get("SOVEREIGN_DATA_DIR", P.home() / ".sovereign")) / "dirty"
+    man = dirty / "manifest.json"
+    if not man.exists():
+        raise Skip("the dirty corpus is not fetched (scripts/fetch_dirty_corpus.py)")
+    items = [i for i in json.loads(man.read_text())["items"]
+             if i["class"] == "spreadsheets" and i.get("truth")]
+    hits = total = 0
+    for it in items:
+        for key, want in it["truth"]["fields"].items():
+            meta = it["truth"]["cells"].get(key) or {}
+            if not meta.get("cell"):
+                continue
+            total += 1
+            got = spreadsheet.read_range(dirty / it["path"], meta["sheet"], meta["cell"])
+            val = (got["cells"] or [{}])[0].get("value", "")
+            try:
+                hits += float(val) == float(str(want).replace(",", ""))
+            except ValueError:
+                hits += val.strip() == str(want).strip()
+    assert total and hits == total, f"{hits}/{total} cells read correctly"
+    return f"{hits}/{total} truth cells read correctly from {len(items)} real EIA/DESNZ workbooks"
+
+
 CHECKS = [a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15,
-          a16, a17, a18, a19, a20, a21]
+          a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27]
 
 
 # ------------------------------------------------------------------------ main

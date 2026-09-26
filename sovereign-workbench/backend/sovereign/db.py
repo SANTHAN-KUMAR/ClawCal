@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     conversation_id   TEXT,
     title             TEXT NOT NULL,
     prompt            TEXT NOT NULL,
-    owner             TEXT NOT NULL DEFAULT 'operator',
+    owner             TEXT NOT NULL DEFAULT 'system',
     department        TEXT NOT NULL DEFAULT 'default',
     workflow          TEXT NOT NULL DEFAULT 'general',
     task_type         TEXT,
@@ -388,6 +388,218 @@ CREATE TABLE IF NOT EXISTS drawing_legend (
     ts          REAL NOT NULL
 );
 
+-- ---------------------------------------------------------------- control plane (v2)
+-- Who. Every task, approval, decision and audit row names a principal from here.
+-- The source is pluggable (local table first, a directory service later); the
+-- row is what the rest of the plane reads either way.
+CREATE TABLE IF NOT EXISTS principals (
+    name         TEXT PRIMARY KEY,
+    display_name TEXT,
+    department   TEXT NOT NULL DEFAULT 'default',
+    role         TEXT NOT NULL DEFAULT 'engineer',  -- viewer|engineer|approver|admin
+    source       TEXT NOT NULL DEFAULT 'local',
+    token_hash   TEXT,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created_at   REAL NOT NULL,
+    last_seen_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_principals_token ON principals(token_hash);
+
+-- A session is a conversation with a working set and a permission mode. Its id
+-- is the tasks.conversation_id of every turn in it.
+CREATE TABLE IF NOT EXISTS sessions (
+    id              TEXT PRIMARY KEY,
+    title           TEXT,
+    owner           TEXT NOT NULL,
+    department      TEXT NOT NULL DEFAULT 'default',
+    permission_mode TEXT NOT NULL DEFAULT 'review',
+    state           TEXT NOT NULL DEFAULT 'OPEN',
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_sessions_owner ON sessions(owner, updated_at);
+
+-- The documents a session is about. "The attached document" resolves here and
+-- nowhere else.
+CREATE TABLE IF NOT EXISTS session_documents (
+    session_id TEXT NOT NULL,
+    doc_id     TEXT NOT NULL,
+    title      TEXT,
+    kind       TEXT,
+    pages      INTEGER,
+    added_by   TEXT,
+    added_at   REAL NOT NULL,
+    PRIMARY KEY (session_id, doc_id)
+);
+
+-- One uniform record of every decision any authority made. Hash-chained on its
+-- own and cross-referenced into audit_log, so removing a decision breaks both.
+CREATE TABLE IF NOT EXISTS decisions (
+    seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id           TEXT NOT NULL UNIQUE,
+    ts           REAL NOT NULL,
+    authority    TEXT NOT NULL,
+    subject_kind TEXT,
+    subject_id   TEXT,
+    task_id      TEXT,
+    session_id   TEXT,
+    outcome      TEXT NOT NULL,
+    reason       TEXT,
+    basis        TEXT,
+    principal    TEXT,
+    prev_hash    TEXT NOT NULL,
+    hash         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_decisions_task ON decisions(task_id, seq);
+CREATE INDEX IF NOT EXISTS ix_decisions_session ON decisions(session_id, seq);
+CREATE INDEX IF NOT EXISTS ix_decisions_authority ON decisions(authority, seq);
+
+-- Runtime overrides made through the admin surface (control/admin.py).
+CREATE TABLE IF NOT EXISTS control_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    changed_by TEXT,
+    changed_at REAL NOT NULL
+);
+
+-- ---------------------------------------------------------------- trust domain
+-- The appliance is the *node* of a trust domain: one node, zero or more
+-- member devices, one policy (sovereign-workbench-v2.md §1). These tables are
+-- what the node knows about the devices it serves.
+
+-- A device is a key, not a machine: whoever holds the private key is the
+-- device. `managed` and a verified attestation are set by an admin or a
+-- verifier, never by the device itself; the grade is computed from them.
+CREATE TABLE IF NOT EXISTS devices (
+    id            TEXT PRIMARY KEY,
+    principal     TEXT NOT NULL,
+    name          TEXT,
+    platform      TEXT NOT NULL,             -- linux | windows | macos | ios | android
+    public_key    TEXT NOT NULL UNIQUE,      -- Ed25519, hex
+    key_kind      TEXT NOT NULL DEFAULT 'software',  -- software | tpm | secure-enclave
+    managed       INTEGER NOT NULL DEFAULT 0,
+    attestation   TEXT,                      -- json: kind, verified, verifier, detail
+    grade         TEXT,                      -- A | B | C | D
+    grade_reason  TEXT,
+    egress_report TEXT,                      -- json: the client's last self-check
+    profile       TEXT,                      -- json: B5 measurements
+    device_class  TEXT,                      -- B5 class for the model it was placed with
+    class_report  TEXT,                      -- json: per-candidate classification
+    mode          TEXT NOT NULL DEFAULT 'attached',
+    state         TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING|ACTIVE|QUARANTINED|REVOKED
+    state_reason  TEXT,
+    enrolled_at   REAL NOT NULL,
+    approved_by   TEXT,
+    last_seen_at  REAL,
+    last_nonce_ts REAL DEFAULT 0,            -- replay floor for signed requests
+    chain_head    TEXT,                      -- the anchor: last verified log hash
+    chain_seq     INTEGER NOT NULL DEFAULT 0,
+    anchored_at   REAL,
+    rebase_pending INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_devices_principal ON devices(principal);
+
+-- A lease is the revocable permission to be a member device. The token is a
+-- short-lived credential on the request path; the device key renews it.
+CREATE TABLE IF NOT EXISTS leases (
+    id              TEXT PRIMARY KEY,
+    device_id       TEXT NOT NULL,
+    principal       TEXT NOT NULL,
+    mode            TEXT NOT NULL,           -- attached | detached
+    grade           TEXT NOT NULL,
+    manifest_sha256 TEXT,
+    token_hash      TEXT NOT NULL UNIQUE,
+    issued_at       REAL NOT NULL,
+    expires_at      REAL NOT NULL,
+    grace_until     REAL NOT NULL,
+    state           TEXT NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE|SUPERSEDED|REVOKED
+    document        TEXT NOT NULL            -- the node-signed lease, json
+);
+CREATE INDEX IF NOT EXISTS ix_leases_device ON leases(device_id, issued_at);
+
+-- The device's own hash-chained log, as uploaded and verified. What the node
+-- holds here is evidence; the device's copy is not.
+CREATE TABLE IF NOT EXISTS device_log (
+    device_id   TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    ts          REAL NOT NULL,
+    kind        TEXT NOT NULL,
+    data        TEXT,
+    prev_hash   TEXT NOT NULL,
+    hash        TEXT NOT NULL,
+    sig         TEXT NOT NULL,
+    received_at REAL NOT NULL,
+    PRIMARY KEY (device_id, seq)
+);
+
+-- A fork, a gap, a bad signature, or a segment that does not start at the
+-- anchor. An open event blocks re-attachment until an operator clears it.
+CREATE TABLE IF NOT EXISTS tamper_events (
+    id          TEXT PRIMARY KEY,
+    device_id   TEXT NOT NULL,
+    ts          REAL NOT NULL,
+    kind        TEXT NOT NULL,
+    detail      TEXT,
+    blocking    INTEGER NOT NULL DEFAULT 1,
+    state       TEXT NOT NULL DEFAULT 'OPEN',   -- OPEN | CLEARED
+    cleared_by  TEXT,
+    cleared_at  REAL,
+    clear_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_tamper_device ON tamper_events(device_id, state);
+
+-- What the node served, to which session, from which document region. The
+-- provenance gate checks a client's claims against *this*, never against the
+-- client's account of what it retrieved (spec §13).
+CREATE TABLE IF NOT EXISTS served_spans (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT,
+    task_id     TEXT,
+    device_id   TEXT,
+    principal   TEXT,
+    span_id     TEXT NOT NULL,
+    doc_id      TEXT,
+    doc_title   TEXT,
+    page_no     INTEGER,
+    region      TEXT,
+    text        TEXT NOT NULL,
+    via         TEXT,
+    served_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_served_session ON served_spans(session_id, span_id);
+CREATE INDEX IF NOT EXISTS ix_served_task ON served_spans(task_id);
+
+-- Files a client staged for execute_remote. Never a mount of anything real:
+-- an explicit copy, confined to the session's staging directory.
+CREATE TABLE IF NOT EXISTS staged_files (
+    session_id TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    sha256     TEXT NOT NULL,
+    bytes      INTEGER NOT NULL,
+    staged_by  TEXT,
+    device_id  TEXT,
+    staged_at  REAL NOT NULL,
+    PRIMARY KEY (session_id, path)
+);
+
+-- Instrument slices (spec §14): ingested documents exported under lease,
+-- encrypted to one device's key. The node keeps the record; the device keeps
+-- ciphertext it can open only while its lease holds.
+CREATE TABLE IF NOT EXISTS slices (
+    id          TEXT PRIMARY KEY,
+    device_id   TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    docs        TEXT NOT NULL,
+    spans       INTEGER NOT NULL,
+    bytes       INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    created_by  TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    expires_at  REAL NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'ACTIVE'   -- ACTIVE | REVOKED
+);
+CREATE INDEX IF NOT EXISTS ix_slices_device ON slices(device_id);
+
 -- ---------------------------------------------------------------- benchmarks
 CREATE TABLE IF NOT EXISTS benchmarks (
     id       TEXT PRIMARY KEY,
@@ -411,6 +623,25 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
     ("tasks", "context_budget_tokens", "INTEGER DEFAULT 0"),
     ("tasks", "compacted_messages", "INTEGER DEFAULT 0"),
     ("model_registry", "kv_mb_per_1k", "REAL DEFAULT 0"),
+    # v2: the four-outcome contract and the principal on every tool call.
+    ("tool_calls", "outcome", "TEXT"),
+    ("tasks", "requested_model", "TEXT"),
+    ("tool_calls", "outcome_reason", "TEXT"),
+    ("tool_calls", "principal", "TEXT"),
+    ("approvals", "required_role", "TEXT"),
+    ("model_registry", "edited_by", "TEXT"),
+    ("approvals", "session_id", "TEXT"),
+    # v2: per-metric sample counts, so every figure can state its basis.
+    ("model_profiles", "load_samples", "INTEGER DEFAULT 0"),
+    ("model_profiles", "decode_samples", "INTEGER DEFAULT 0"),
+    ("model_profiles", "invalid_reason", "TEXT"),
+    ("model_profiles", "measured_caps", "TEXT"),
+    # trust domain: data classes on documents, and the device (if any) and
+    # grade a task was submitted under, and where B1 placed it.
+    ("documents", "data_class", "TEXT NOT NULL DEFAULT 'internal'"),
+    ("tasks", "device_id", "TEXT"),
+    ("tasks", "grade", "TEXT"),
+    ("tasks", "placement", "TEXT"),
 ]
 
 
@@ -442,8 +673,13 @@ def connect() -> sqlite3.Connection:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30.0)
             c.row_factory = sqlite3.Row
+            # Before the schema: an index in SCHEMA may name a column an old
+            # database lacks. After it: on a *fresh* database the tables only
+            # exist now, and a column that lives only in _ADDED_COLUMNS would
+            # otherwise be missing from every new install.
             _migrate(c)
             c.executescript(SCHEMA)
+            _migrate(c)
             c.commit()
             _conn = c
         return _conn

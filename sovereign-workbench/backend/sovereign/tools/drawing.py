@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .. import outcomes
+
 
 from .. import db
 from ..drawings import analyze, graph
@@ -83,8 +85,10 @@ class AnalyseDrawingTool(Tool):
             if did:
                 loaded = analyze.load(did)
                 if loaded:
-                    return ToolResult(True, content=loaded,
-                                      display=f"loaded drawing {loaded['title']}")
+                    return _with_outcome(ToolResult(
+                        True, content=loaded,
+                        display=f"loaded drawing {loaded['title']}"),
+                        loaded.get("source_kind", ""))
 
         path = args.get("path") or ctx.scratch.get("drawing_path")
         if not path:
@@ -138,12 +142,12 @@ class AnalyseDrawingTool(Tool):
                  f"{len(a.symbols)} symbols, {len(a.edges)} traced lines, "
                  f"{a.summary()['confirmed_connectivity']} confirmed connections",
                  a.to_dict())
-        return ToolResult(True, content=a.connectivity_report(),
-                          display=f"{len(a.symbols)} symbols, "
-                                  f"{a.summary()['confirmed_connectivity']} "
-                                  f"confirmed connections",
-                          meta={"drawing_id": a.drawing_id,
-                                "summary": a.summary()})
+        return _with_outcome(ToolResult(
+            True, content=a.connectivity_report(),
+            display=f"{len(a.symbols)} symbols, "
+                    f"{a.summary()['confirmed_connectivity']} confirmed connections",
+            meta={"drawing_id": a.drawing_id, "summary": a.summary()}),
+            a.source_kind)
 
 
 class TraceConnectionTool(Tool):
@@ -184,6 +188,32 @@ class TraceConnectionTool(Tool):
                                   str(args["to_tag"]).upper())
         ctx.note("drawing", f"Traced {args['from_tag']} -> {args['to_tag']}",
                  result.get("status", ""), result)
-        return ToolResult(True, content=result,
-                          display=f"{args['from_tag']} -> {args['to_tag']}: "
-                                  f"{result.get('status')}")
+        status = str(result.get("status", ""))
+        res = ToolResult(True, content=result,
+                         display=f"{args['from_tag']} -> {args['to_tag']}: {status}")
+        if status == "CONFIRMED":
+            res.outcome = outcomes.ESTABLISHED
+        elif status == "PROBABLE":
+            res.outcome = outcomes.INTERPRETED
+            res.outcome_reason = "the connection is probable, not confirmed by the drawing"
+        else:
+            res.outcome = outcomes.CANNOT_DETERMINE
+            res.outcome_reason = str(result.get("reason") or
+                                     "the drawing does not establish this connection")
+        if loaded.get("source_kind") == "raster" and status != "CONFIRMED":
+            res.outcome = outcomes.DEGRADED
+            res.outcome_reason = ("raster drawing: connectivity cannot be "
+                                  "established from pixels; a vector PDF or CAD "
+                                  "file is needed")
+        return res
+
+
+def _with_outcome(res: ToolResult, source_kind: str) -> ToolResult:
+    """A raster drawing yields inventory only; say so as DEGRADED."""
+    if source_kind == "raster":
+        res.outcome = outcomes.DEGRADED
+        res.outcome_reason = ("raster-only drawing: symbols and tags are an "
+                              "inventory; no connection is CONFIRMED from pixels")
+    else:
+        res.outcome = outcomes.ESTABLISHED
+    return res

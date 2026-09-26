@@ -17,6 +17,12 @@ sys.path.insert(0, str(ROOT / "backend"))
 _TMP = tempfile.mkdtemp(prefix="sovereign-tests-")
 os.environ["SOVEREIGN_DATA_DIR"] = _TMP
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# Unit tests exercise tools directly, with no human to answer an approval.
+# `trusted` is the mode that runs writes without asking; tests of the approval
+# gate itself set their mode explicitly. A wait that does happen fails in
+# seconds rather than hanging the suite for the production 15 minutes.
+os.environ.setdefault("SOVEREIGN_POLICY_MODE", "trusted")
+os.environ.setdefault("SOVEREIGN_APPROVAL_TIMEOUT_S", "5")
 
 import pytest  # noqa: E402
 

@@ -29,7 +29,108 @@ better capability fit.
 
 ---
 
+## Version 2 (ClawCal)
+
+`docs/ARCHITECTURE-v2.md` is the design; this is what it became.
+
+**A delegation surface, not a chat box.** Work happens in *sessions*: a
+conversation with a working set of attached documents, the artefacts it has
+produced, its approvals, and a **permission mode**. `review` (the default) asks
+before every write, code run or deliverable. `trusted` runs them and logs them.
+`locked` permits reads only. The mode is per session and takes effect at the
+running task's next tool call. The same session can be driven from the web
+workbench or from the terminal:
+
+```bash
+./clawcal "summarise the attached report" --attach IR-0731.pdf --mode review
+./clawcal resume <session>        ./clawcal approve <id>        ./clawcal status
+```
+
+Both render one server-side transcript
+(`GET /api/sessions/{id}/transcript`), so a task looks the same in either.
+
+**An explicit control plane.** Eight authorities (admission, residency,
+routing, registry, tool policy, evidence, sovereignty, trust) each write to one
+`decisions` table. It is hash-chained and cross-referenced into the audit log,
+so deleting or truncating a decision is detected at both ends. Every task,
+approval, decision and audit row names a **principal** with a role. The API
+reaches the authorities only through `sovereign.control`, and a test enforces
+it.
+
+**The refusal contract.** Every tool result, answer and artefact is
+`ESTABLISHED`, `INTERPRETED`, `CANNOT DETERMINE` or `DEGRADED`. A capability
+running in a reduced mode is announced, not left for the reader to infer: a
+raster drawing, a sandbox without a network namespace, lexical-only retrieval,
+an unverified host firewall. Evidence badges sit beside every number in an
+answer; a badge opens the source page with the cited region highlighted.
+
+**Spreadsheet work** is a tool pair: `spreadsheet_read` and `spreadsheet_edit`.
+It reads merged, multi-row headers and units. It writes formulas as formulas to
+a session copy (never to the uploaded evidence), and refuses literal numbers no
+source supports. On eight real EIA and UK DESNZ workbooks it read 31 of 31
+ground-truth cells correctly.
+
+**Measured, not assumed.** Every performance figure carries its basis
+(`measured` / `calibrated` / `prior`, with a sample count). A queued task's
+wait says "estimated 40 s (measured, 32 samples)" or "unknown — first run".
+Impossible profile rows are flagged and ignored.
+
+**Memory safety.** Host RAM is priced before every model load, including loads
+made from inside tools, and a backend's own memory refusals are learned. See
+`docs/deployment.md` §7 for the OOM that made this necessary.
+
+**Dirty inputs.** `scripts/fetch_dirty_corpus.py` fetches a held-out corpus of
+real documents nobody on this project made: FUNSD scans, CORD receipt photos,
+IAM handwriting, public spreadsheets, real P&IDs, and injected pages.
+`scripts/eval_dirty.py` scores the product's own pipeline on it, per class, as
+**quality, refusal rate and confidently-wrong rate**. Results:
+`docs/dirty-eval.md`.
+
+**Sovereignty you can file.** The self-test produces a PDF signed with the
+appliance's Ed25519 key. The audit export is signed JSONL. Both verify offline:
+`./clawcal verify <file>`.
+
+**Production.** `sudo ./ops/install.sh` takes a clean Fedora, Ubuntu or Amazon
+Linux host to a running, self-tested appliance. It installs a hardened unit,
+token auth, a model set sized to the GPU, and a rollback-guarded egress policy
+that keeps SSH, DHCP and NTP working and blocks the cloud metadata endpoint.
+Read `docs/deployment.md` before putting it on a network.
+
+## The trust domain (Architecture v2, re-based)
+
+`sovereign-workbench-v2.md` is the design, and `docs/trust-domain.md` describes
+what was built. The appliance becomes the **node** of a trust domain. Laptops
+and desktops enrol as **member devices**. A policy on the node says what each
+device's **grade** may receive.
+
+- **Devices are keys.** Enrolment proves possession of an Ed25519 key. Leases are signed by the node and renewed by the device key. Revoking a device stops its lease at once, and its next renewal fails.
+- **Grades come from facts the device can't set:** an admin's "managed" flag, a verified attestation, a passing egress self-check. Grade C (unmanaged) may attach, retrieves public and internal documents only, and may not work detached. A confidential document is invisible to it and refused by name.
+- **Every device keeps a hash-chained, signed log**, anchored on the node at each sync. A fork, gap, edited entry or forged signature quarantines the device until an admin clears it with a reason.
+- **B5 classifies each machine per model** from the weights file's own GGUF header: FIT-FAST, SPLIT-PCIE, UNIFIED, or research tiers that are reported but never shipped. B1 decides where each task runs: node, client, or split.
+- **A TUF-style signed bundle store** serves the client package and per-device manifests, refusing rollback, freeze and forgery.
+- **Attached mode:** `clawcal attach "<task>"` runs opencode on the laptop, pinned to the node's `/v1` and its MCP tools (`retrieve`, `extract_values`, `stage`, `execute_remote`, `deliver`). The node's gate checks every figure against the spans *it* served, strips invented ones, and links every kept figure in the `.docx` to its scanned page.
+- **Detached work:** with a detached lease (grades A and B), a laptop runs a node-shipped, hash-verified llama.cpp pinned to its real GPU, decides admission itself from its signed manifest, and anchors everything it did when it rejoins. **Instrument slices** carry chosen documents off-site, encrypted to the device and gated by the node's own rules, delivered as `.docx` on rejoin.
+- **TPM attestation**, verified on the node offline: EK chain, credential activation, a PCR quote against a baseline. A laptop rooted while away fails on return.
+- **The organisation's own opencode build** (`bundle/opencode/`) has its network call sites removed from the binary. With egress open it made 100 of 100 cold starts touching nothing but loopback; upstream reached Cloudflare-hosted services and hung.
+- **Operations:** `scripts/trustctl.py` (roster, revoke, slices, bundles, root rotation) and `trustctl health`.
+
+```bash
+./clawcal device enrol && ./clawcal device manifest && ./clawcal attach "draft an approval note for IR-2026-0731"
+python3 scripts/verify_trust_domain.py --harness   # T1–T17 on real processes (see --help)
+python3 scripts/trustctl.py health
+```
+
+---
+
 ## Quick start
+
+```bash
+./ops/install.sh --user            # workstation: venv, models sized to the GPU, service
+./clawcal status                   # or open http://127.0.0.1:8794
+./clawcal selftest --report        # signed sovereignty report
+```
+
+Or by hand:
 
 ```bash
 # 0. A local inference backend. Ollama is the reference; anything speaking the

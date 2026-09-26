@@ -1,0 +1,54 @@
+{
+ "local": {
+  "api": "http://127.0.0.1:8080/v1",
+  "env": [],
+  "id": "local",
+  "models": {
+   "generalist": {
+    "attachment": false,
+    "cost": {
+     "input": 0,
+     "output": 0
+    },
+    "id": "generalist",
+    "limit": {
+     "context": 32768,
+     "output": 4096
+    },
+    "name": "Generalist \u2014 local engine",
+    "reasoning": false,
+    "release_date": "2026-09-25",
+    "temperature": true,
+    "tool_call": true
+   }
+  },
+  "name": "local engine",
+  "npm": "@ai-sdk/openai-compatible"
+ },
+ "node": {
+  "api": "https://node.invalid/v1",
+  "env": [],
+  "id": "node",
+  "models": {
+   "generalist": {
+    "attachment": false,
+    "cost": {
+     "input": 0,
+     "output": 0
+    },
+    "id": "generalist",
+    "limit": {
+     "context": 32768,
+     "output": 4096
+    },
+    "name": "Generalist \u2014 trust-domain node",
+    "reasoning": false,
+    "release_date": "2026-09-25",
+    "temperature": true,
+    "tool_call": true
+   }
+  },
+  "name": "trust-domain node",
+  "npm": "@ai-sdk/openai-compatible"
+ }
+}

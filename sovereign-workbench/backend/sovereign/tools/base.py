@@ -7,9 +7,14 @@ schema and a static risk class, invoked through `ToolGateway.invoke`, which:
     2. asks the policy engine whether it may run and whether a human must approve;
     3. blocks for approval if required;
     4. executes with a timeout;
-    5. records arguments, decision, reason, result and duration.
+    5. records arguments, decision, reason, result, duration and outcome.
 
-Every one of those steps produces a row an operator can read afterwards.
+Every one of those steps produces a row an operator can read afterwards, and the
+policy step also writes a decision record (authority `tool_policy`).
+
+Every result carries one of the four outcomes of the refusal contract
+(`sovereign.outcomes`). A tool that knows better sets it; otherwise it is
+derived here — a failure is CANNOT_DETERMINE, never silence.
 """
 from __future__ import annotations
 
@@ -20,7 +25,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .. import audit, db
+from .. import audit, db, outcomes
 from ..gateway.base import ToolSpec
 from ..policy import tool_policy
 from ..policy.tool_policy import Risk, policy
@@ -33,22 +38,34 @@ class ToolResult:
     display: str = ""
     error: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
+    # The refusal contract. Empty means "derive it" (see ToolGateway._settle).
+    outcome: str = ""
+    outcome_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "content": self.content, "display": self.display,
-                "error": self.error, "meta": self.meta}
+                "error": self.error, "meta": self.meta, "outcome": self.outcome,
+                "outcome_reason": self.outcome_reason}
 
     def for_model(self, limit: int = 6000) -> str:
-        """The observation string handed back to the agent."""
+        """The observation string handed back to the agent.
+
+        The outcome leads, so the model reads DEGRADED or CANNOT DETERMINE
+        before it reads the content and can carry it into its answer.
+        """
+        tag = ""
+        if self.outcome and self.outcome != outcomes.ESTABLISHED:
+            tag = f"[OUTCOME: {outcomes.LABELS[self.outcome]}"
+            tag += f" — {self.outcome_reason}]\n" if self.outcome_reason else "]\n"
         if not self.ok:
-            return f"ERROR: {self.error}"
+            return f"{tag}ERROR: {self.error}"
         if isinstance(self.content, str):
             body = self.content
         else:
             body = db.jdump(self.content)
         if len(body) > limit:
             body = body[:limit] + f"\n[... truncated, {len(body) - limit} more chars]"
-        return body
+        return tag + body
 
 
 class Tool(abc.ABC):
@@ -78,6 +95,11 @@ class ToolContext:
     step: int = 0
     emit: Callable[..., None] | None = None
     scratch: dict[str, Any] = field(default_factory=dict)
+    # Who the task runs for, and whether it has been told to stop. The second
+    # lets a wait on a human approval end when the task is cancelled.
+    principal: str = "system"
+    should_stop: Callable[[], bool] | None = None
+    session_id: str | None = None
 
     def note(self, kind: str, label: str, detail: str = "",
              payload: Any = None) -> None:
@@ -112,7 +134,7 @@ class ToolGateway:
 
     def invoke(self, name: str, args: dict[str, Any], ctx: ToolContext, *,
                allowed_tools: set[str] | None = None,
-               approval_timeout_s: float = 300.0) -> ToolResult:
+               approval_timeout_s: float | None = None) -> ToolResult:
         started = time.time()
         call_id = db.new_id("tc")
         tool = self._tools.get(name)
@@ -124,8 +146,26 @@ class ToolGateway:
                          res, started, "tool not registered")
             return res
 
+        if not isinstance(args, dict):
+            # A model that emits a string or a list here would otherwise crash
+            # the tool with an AttributeError several frames down.
+            res = ToolResult(False, error=f"arguments to {name} must be a JSON "
+                                          f"object, got {type(args).__name__}")
+            self._record(call_id, ctx, name, {"_raw": str(args)[:400]},
+                         "BAD_ARGUMENTS", res, started, "arguments not an object")
+            return res
+
         decision = policy.evaluate(name, tool.risk, args, task_id=ctx.task_id,
                                    allowed_tools=allowed_tools)
+        from ..control import decisions
+        decisions.record(
+            "tool_policy",
+            "DENY" if not decision.allowed
+            else "ASK" if decision.requires_approval else "ALLOW",
+            decision.reason, subject_kind="tool_call", subject_id=call_id,
+            task_id=ctx.task_id, principal=ctx.principal,
+            basis={"tool": name, "risk": Risk(tool.risk).name,
+                   "mode": decision.mode})
         if not decision.allowed:
             res = ToolResult(False, error=f"POLICY_DENIED: {decision.reason}")
             self._record(call_id, ctx, name, args, "DENIED", res, started,
@@ -141,7 +181,8 @@ class ToolGateway:
             aid = tool_policy.request_approval(ctx.task_id, name, args, summary)
             ctx.note("approval_pending", f"Approval required: {name}",
                      decision.reason, {"approval_id": aid, "summary": summary})
-            state = tool_policy.wait_for_approval(aid, timeout_s=approval_timeout_s)
+            state = tool_policy.wait_for_approval(aid, timeout_s=approval_timeout_s,
+                                                  should_stop=ctx.should_stop)
             if state != "APPROVED":
                 res = ToolResult(False, error=f"APPROVAL_{state}: the operator did "
                                               f"not approve {name}")
@@ -161,6 +202,21 @@ class ToolGateway:
         self._record(call_id, ctx, name, args,
                      "EXECUTED" if res.ok else "FAILED", res, started,
                      decision.reason)
+        return res
+
+    @staticmethod
+    def _settle(res: ToolResult) -> ToolResult:
+        """Give every result an outcome. A tool that set one keeps it."""
+        if res.outcome:
+            outcomes.check(res.outcome)
+        elif not res.ok:
+            res.outcome = outcomes.CANNOT_DETERMINE
+            res.outcome_reason = res.outcome_reason or (res.error or "")[:240]
+        elif res.meta.get("degraded"):
+            res.outcome = outcomes.DEGRADED
+            res.outcome_reason = res.outcome_reason or str(res.meta["degraded"])[:240]
+        else:
+            res.outcome = outcomes.ESTABLISHED
         return res
 
     def _run_with_timeout(self, tool: Tool, args: dict[str, Any],
@@ -190,13 +246,19 @@ class ToolGateway:
                 args: dict[str, Any], decision: str, res: ToolResult,
                 started: float, reason: str) -> None:
         duration = time.time() - started
+        self._settle(res)
+        from ..policy.tool_policy import mode_for_task
+        mode = mode_for_task(ctx.task_id)[0] or policy.mode
         db.insert("tool_calls", {
             "id": call_id, "task_id": ctx.task_id, "step": ctx.step, "tool": name,
             "args": db.jdump(args)[:4000], "decision": decision,
-            "policy_mode": policy.mode, "reason": reason[:600],
+            "policy_mode": mode, "reason": reason[:600],
             "result": db.jdump(res.to_dict())[:8000], "ok": int(res.ok),
-            "duration_s": round(duration, 3), "created_at": started})
+            "duration_s": round(duration, 3), "created_at": started,
+            "outcome": res.outcome, "outcome_reason": res.outcome_reason[:600],
+            "principal": ctx.principal})
         audit.record("tool", name, outcome=decision, task_id=ctx.task_id,
+                     actor=ctx.principal,
                      detail={"args": db.jdump(args)[:400], "ok": res.ok,
                              "duration_s": round(duration, 2),
                              "error": res.error[:200]})

@@ -58,7 +58,7 @@ class TaskControl:
             self._pause.clear()
             self._resume.set()
 
-    def request_cancel(self, reason: str = "terminated by operator") -> None:
+    def request_cancel(self, reason: str = "terminated on request") -> None:
         with self._lock:
             self.pause_reason = reason
             self._cancel.set()

@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import audit, db
+from .. import audit, db, outcomes
 from ..agent.harness import run_agent
 from ..evidence import provenance
 from ..gateway import gateway
@@ -36,10 +36,12 @@ TOOLSETS: dict[str, list[str]] = {
                 "run_code", "analyse_drawing", "trace_drawing_connection",
                 "generate_approval_note", "generate_report",
                 "generate_spreadsheet", "generate_presentation",
+                "spreadsheet_read", "spreadsheet_edit",
                 "request_human_approval"],
     "inspection_to_approval": ["extract_document_values", "calculator",
                                "search_knowledge", "list_documents",
-                               "read_document_page", "generate_approval_note",
+                               "read_document_page", "spreadsheet_read",
+                               "generate_approval_note",
                                "generate_spreadsheet", "request_human_approval"],
     "drawing_review": ["analyse_drawing", "trace_drawing_connection",
                        "search_knowledge", "read_document_page", "calculator",
@@ -49,7 +51,8 @@ TOOLSETS: dict[str, list[str]] = {
                         "list_documents"],
     "engineering_qa": ["extract_document_values", "calculator",
                        "search_knowledge", "list_documents",
-                       "read_document_page", "generate_report"],
+                       "read_document_page", "spreadsheet_read",
+                       "generate_report"],
     "sovereignty_proof": ["sovereignty_selftest", "run_code"],
 }
 
@@ -271,6 +274,11 @@ def sovereignty_proof_runner(task: dict[str, Any], ctl: TaskControl,
 
     # Layer 3: sandbox network namespace.
     probe = egress_probe(task["id"])
+    if not probe.get("attempts"):
+        # A probe that never ran blocked nothing: it proves nothing either way.
+        findings.append({"layer": "sandbox-netns", "target": "(probe did not run)",
+                         "result": "CANNOT DETERMINE", "ok": False,
+                         "error": (probe.get("raw") or {}).get("stderr", "")[:200]})
     for a in probe.get("attempts", []):
         findings.append({"layer": "sandbox-netns", "target": a.get("target"),
                          "result": a.get("result"),
@@ -294,7 +302,7 @@ def sovereignty_proof_runner(task: dict[str, Any], ctl: TaskControl,
         f"{len(findings)} outbound attempts blocked across the application guard "
         f"and the sandbox network namespace. "
         f"Host nftables default-deny table: "
-        f"{'loaded' if nft.get('loaded') else 'NOT loaded'}. "
+        f"{'loaded' if nft.get('loaded') else 'could not be read without root privilege (check with: sudo ops/egress-policy.sh status)' if nft.get('loaded') is None else 'NOT loaded'}. "
         f"Audit chain: {'verified' if chain['ok'] else 'BROKEN'} over "
         f"{chain.get('entries', 0)} entries. "
         f"{len(recent)} denial events were recorded and attributed to this task.")
@@ -304,9 +312,31 @@ def sovereignty_proof_runner(task: dict[str, Any], ctl: TaskControl,
     audit.record("sovereignty", "self_test", task_id=task["id"],
                  outcome="BLOCKED" if all_blocked else "LEAK",
                  detail={"findings": findings, "nftables": nft})
+    from ..control import decisions
+    decisions.record("sovereignty", "SELFTEST_PASS" if all_blocked else "SELFTEST_LEAK",
+                     summary, subject_kind="selftest", subject_id=task["id"],
+                     task_id=task["id"], principal=task.get("owner"),
+                     basis={"blocked": sum(1 for f in findings if f["ok"]),
+                            "attempts": len(findings),
+                            "nftables_loaded": bool(nft.get("loaded")),
+                            "audit_ok": chain.get("ok")})
+    # The refusal contract applies here too. Every attempt refused is an
+    # established fact; a host firewall this process cannot confirm is a layer
+    # running unverified, which the reader must be told, not left to infer.
+    degraded = []
+    if not nft.get("loaded"):
+        degraded.append("sovereignty: the host firewall layer is "
+                        + ("not applied" if nft.get("loaded") is False
+                           else "unverified without root privilege"))
+    headline = ("CANNOT_DETERMINE" if not all_blocked else
+                "DEGRADED" if degraded else "ESTABLISHED")
     return {"summary": summary, "all_blocked": all_blocked,
             "findings": findings, "nftables": nft, "audit_chain": chain,
-            "denial_events": recent}
+            "denial_events": recent,
+            "outcome": {"headline": headline,
+                        "label": headline.replace("_", " "),
+                        "degraded": degraded, "tool_outcomes": {},
+                        "value_outcomes": {}}}
 
 
 # ---------------------------------------------------------------------- shared
@@ -327,8 +357,10 @@ def _finalise(task: dict[str, Any], ctl: TaskControl,
                      "page_no": r["page_no"], "doc_title": r["title"],
                      "region": db.jload(r["region"])} for r in rows]
 
-    ctx = provenance.EvidenceContext(passages=passages,
-                                     calculations=task_calculations(task["id"]))
+    ctx = provenance.EvidenceContext(
+        passages=passages, calculations=task_calculations(task["id"]),
+        working_set={a["doc_id"] for a in (db.jload(task.get("attachments"), []) or [])
+                     if isinstance(a, dict) and a.get("doc_id")})
     report = provenance.classify_text(text, ctx, task_id=task["id"])
     counts = report.counts
 
@@ -337,13 +369,42 @@ def _finalise(task: dict[str, Any], ctl: TaskControl,
              f"{counts['C']} interpretation, {counts['D']} unsupported",
              report.to_dict())
 
+    # The answer's outcome under the refusal contract: per-value classes from
+    # provenance, plus every tool outcome in the trajectory, so an answer
+    # produced while a capability was degraded is marked degraded.
+    tool_rows = db.rows_to_dicts(db.query(
+        "SELECT tool, outcome, outcome_reason AS reason FROM tool_calls "
+        "WHERE task_id=? ORDER BY created_at", (task["id"],)))
+    stopped = str(result.get("stopped_because") or "")
+    if stopped and stopped != "completed":
+        tool_rows.append({"tool": "agent", "outcome": "DEGRADED",
+                          "reason": f"the trajectory ended early: {stopped}"})
+    answer_outcome = outcomes.summarise(tool_rows, counts)
+    from ..control import decisions
+    decisions.record("evidence", answer_outcome["headline"],
+                     f"final answer: {counts['A']} source, {counts['B']} derived, "
+                     f"{counts['C']} interpretation, {counts['D']} unsupported"
+                     + (f"; degraded: {'; '.join(answer_outcome['degraded'])}"
+                        if answer_outcome["degraded"] else ""),
+                     subject_kind="answer", subject_id=task["id"],
+                     task_id=task["id"], principal=task.get("owner"),
+                     basis={"counts": counts,
+                            "tool_outcomes": answer_outcome["tool_outcomes"]})
+
     artifacts = db.rows_to_dicts(db.query(
         "SELECT id, name, kind, bytes, sha256 FROM artifacts WHERE task_id=?",
         (task["id"],)))
 
     result.pop("scratch", None)
+    # The delivered answer never states an unsupported number as fact. The
+    # model's own wording survives in `model_text` and, marked, in `annotated`
+    # (the web shows it with a red D badge); `summary` — what every client
+    # prints as the answer — carries the refusal in place of the value.
+    delivered = provenance.redact_unsupported(text, report)
     return {**result,
-            "summary": text,
+            "summary": delivered,
+            "model_text": text,
+            "outcome": answer_outcome,
             "annotated": provenance.annotate(text, report),
             "provenance": report.to_dict(),
             "artifacts": artifacts,

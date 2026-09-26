@@ -55,10 +55,22 @@ class TestClassification:
 
 
 class TestSelection:
-    def test_a_vision_task_requires_a_vision_model(self):
+    def test_an_image_task_is_reported_by_a_text_model(self):
+        # §6.2: the vision model reads regions at ingest; the text model reports.
         c = router.classify("Read this scan", attachments=[{"kind": "image"}])
+        assert c.task_type == "vision_understanding"
         d = router.select_model(c, resident=[])
-        assert registry.get(d.model).cap("vision") >= 0.4
+        assert d.model and registry.get(d.model).cap("text") >= 0.85
+
+    def test_the_best_measured_vlm_reads_before_any_claim(self):
+        from sovereign import db
+        db.upsert("model_profiles", {"model": "granite3.2-vision-2b",
+                                     "measured_caps": '{"vision": {"value": 0.45, "samples": 49}}'},
+                  key="model")
+        registry.invalidate()
+        order = [c.name for c in registry.vision_models()]
+        measured = [n for n in order if registry.get(n).cap_basis("vision") == "measured"]
+        assert order[:len(measured)] == measured
 
     def test_residency_is_preferred_when_the_gap_is_small(self):
         c = router.classify("Summarise this document for the digest",
@@ -115,7 +127,17 @@ class TestAdmission:
                                          router.TASK_TYPES["summarisation"])
         assert why is None and fit > 0.5
 
-    def test_the_vision_model_still_wins_vision_work(self):
+    def test_a_small_vlm_is_not_the_reporting_agent(self):
         fit, why = router.capability_fit(registry.get("qwen2.5vl-3b"),
                                          router.TASK_TYPES["vision_understanding"])
-        assert why is None and fit > 0.5
+        assert why is not None          # below the text floor for reporting
+
+
+def test_an_explicit_model_request_survives_to_admission():
+    from sovereign import db
+    from sovereign.runtime.scheduler import scheduler
+    tid = scheduler.submit(title="t", prompt="summarise the digest",
+                           owner="system", model="gpt-oss-20b")
+    row = db.query_one("SELECT requested_model FROM tasks WHERE id=?", (tid,))
+    assert row["requested_model"] == "gpt-oss-20b"
+    db.execute("UPDATE tasks SET state='TERMINATED' WHERE id=?", (tid,))

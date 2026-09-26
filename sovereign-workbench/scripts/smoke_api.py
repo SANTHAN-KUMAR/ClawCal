@@ -30,6 +30,11 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 def main() -> int:
     with TestClient(app) as c:
+        # This exercises HTTP surfaces, not execution: stop the scheduler loop so
+        # a submitted task stays queued and no model is ever loaded.
+        from sovereign import control
+        control.admission.stop()
+
         print("\n-- core --")
         r = c.get("/api/system")
         s = r.json()
@@ -125,6 +130,72 @@ def main() -> int:
             check(f"  includes {key}", key in t)
         check("POST /api/tasks/{id}/cancel",
               c.post(f"/api/tasks/{tid}/cancel", json={}).status_code == 200)
+
+        print("\n-- identity --")
+        w = c.get("/api/whoami").json()
+        check("GET /api/whoami", bool(w["principal"]["name"]), w["principal"]["name"])
+        r = c.get("/api/system", headers={"X-Forwarded-For": "203.0.113.9"})
+        check("  a proxied request without a token is refused", r.status_code == 401,
+              str(r.status_code))
+        r = c.get("/api/system", headers={"Authorization": "Bearer not-a-token"})
+        check("  an invalid token is refused", r.status_code == 401, str(r.status_code))
+        check("GET /api/health is open", c.get("/api/health",
+              headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 200)
+
+        print("\n-- sessions --")
+        r = c.post("/api/sessions", json={"title": "smoke", "mode": "locked"})
+        check("POST /api/sessions", r.status_code == 200, r.text[:80])
+        sid = r.json()["id"]
+        check("  starts in the requested mode", r.json()["permission_mode"] == "locked")
+        r = c.post(f"/api/sessions/{sid}/mode", json={"mode": "trusted"})
+        check("POST /api/sessions/{id}/mode", r.status_code == 200
+              and r.json()["permission_mode"] == "trusted")
+        check("  an unknown mode is refused",
+              c.post(f"/api/sessions/{sid}/mode", json={"mode": "yolo"}).status_code == 400)
+        r = c.post("/api/tasks", json={"prompt": "What does SOP-MECH-014 say about "
+                                       "retention?", "session_id": sid})
+        check("POST /api/tasks into a session", r.status_code == 200
+              and r.json()["session_id"] == sid)
+        t = c.get(f"/api/sessions/{sid}/transcript").json()
+        kinds = {e["kind"] for e in t["entries"]}
+        check("GET /api/sessions/{id}/transcript", {"user", "decision"} <= kinds,
+              ", ".join(sorted(kinds)))
+        txt = c.get(f"/api/sessions/{sid}/transcript?format=text").text
+        check("  renders as text for the terminal", "> What does SOP-MECH-014" in txt)
+        d = c.get(f"/api/decisions?session_id={sid}").json()["decisions"]
+        check("GET /api/decisions", any(x["outcome"] == "MODE_SET" for x in d),
+              f"{len(d)} decisions")
+        check("GET /api/audit/verify", c.get("/api/audit/verify").json()["ok"])
+
+        print("\n-- admin --")
+        check("GET /api/admin/principals",
+              c.get("/api/admin/principals").status_code == 200)
+        lim = c.get("/api/admin/limits").json()["limits"]
+        check("GET /api/admin/limits", "max_queue_depth" in lim)
+        check("  an out-of-range limit is refused",
+              c.post("/api/admin/limits", json={"max_concurrent_agents": 0}).status_code == 400)
+        eng = c.post("/api/admin/principals", json={"name": "smoke-engineer",
+                                                    "role": "engineer"}).json()
+        hdr = {"Authorization": f"Bearer {eng['token']}"}
+        check("  an engineer cannot use admin routes",
+              c.get("/api/admin/principals", headers=hdr).status_code == 403)
+        check("  an engineer cannot read another's session",
+              c.get(f"/api/sessions/{sid}", headers=hdr).status_code == 403)
+        check("  an engineer cannot decide approvals",
+              c.post("/api/approvals/appr-none", json={"approve": True},
+                     headers=hdr).status_code == 403)
+
+        print("\n-- guards --")
+        r = c.post("/api/drawings/analyse", json={"path": "/etc/passwd"})
+        check("  drawing analysis refuses host paths", r.status_code == 403,
+              str(r.status_code))
+        r = c.post("/api/upload", files={"file": ("empty.txt", b"")})
+        check("  an empty upload is refused", r.status_code == 400)
+        s2 = c.get("/api/sovereignty").json()
+        check("GET /api/sovereignty (strip)", s2["state"] in ("green", "amber", "red")
+              and "head" in s2["audit"], s2["state"])
+        c.post(f"/api/tasks/{c.get('/api/tasks?limit=1').json()['tasks'][0]['id']}/cancel",
+               json={})
 
         print("\n-- sovereignty --")
         n = c.get("/api/network").json()

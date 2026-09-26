@@ -45,16 +45,57 @@ class ModelCard:
     profile: dict[str, Any] = field(default_factory=dict)
 
     def cap(self, axis: str) -> float:
+        """A measured capability if the dirty-corpus evaluation recorded one.
+
+        Catalogue scores are claims. Once `scripts/eval_dirty.py --record` has
+        measured a model on this appliance, the measurement replaces the claim,
+        so any model — better or worse than the catalogue says — is ranked by
+        what it actually did, with no code or catalogue change.
+        """
+        measured = (self.profile.get("measured_caps") or {})
+        if isinstance(measured, str):
+            import json
+            try:
+                measured = json.loads(measured)
+            except ValueError:
+                measured = {}
+        m = measured.get(axis)
+        if isinstance(m, dict) and m.get("value") is not None and \
+                (m.get("samples") or 0) >= 5:
+            return float(m["value"])
         return float(self.caps.get(axis, 0.0))
+
+    def cap_basis(self, axis: str) -> str:
+        m = (self.profile.get("measured_caps") or {})
+        if isinstance(m, str):
+            import json
+            try:
+                m = json.loads(m)
+            except ValueError:
+                m = {}
+        v = m.get(axis) if isinstance(m, dict) else None
+        return "measured" if (isinstance(v, dict) and (v.get("samples") or 0) >= 5) \
+            else "claim"
+
+    def _profiled(self, key: str) -> float | None:
+        """A profile value, unless the row was flagged invalid for that field.
+
+        `invalid_reason` is written by runtime.perfmodel; a field it names is a
+        recording bug, and admission must not plan around it.
+        """
+        v = self.profile.get(key)
+        if not v or key in (self.profile.get("invalid_reason") or ""):
+            return None
+        return float(v)
 
     @property
     def decode_tps(self) -> float:
-        return float(self.profile.get("decode_tps") or 0.0)
+        return self._profiled("decode_tps") or 0.0
 
     @property
     def cold_load_s(self) -> float:
         """Measured cost of making this model resident. The scheduler's core number."""
-        v = self.profile.get("cold_load_s")
+        v = self._profiled("cold_load_s")
         if v:
             return float(v)
         # Fall back to a size-derived estimate: NVMe read + init, ~1.1 GB/s effective.
@@ -71,7 +112,7 @@ class ModelCard:
 
     @property
     def residency_mb(self) -> float:
-        v = self.profile.get("vram_resident_mb")
+        v = self._profiled("vram_resident_mb")
         return float(v) if v else float(self.est_vram_mb or self.weights_mb)
 
     def to_row(self) -> dict[str, Any]:
@@ -89,6 +130,8 @@ class ModelCard:
         d = asdict(self)
         d["cold_load_s"] = round(self.cold_load_s, 2)
         d["residency_mb"] = round(self.residency_mb, 1)
+        from ..runtime import perfmodel
+        d["basis"] = perfmodel.card_basis(self)
         return d
 
 
@@ -155,7 +198,126 @@ SEED: list[ModelCard] = [
         notes="Small always-affordable VLM: scanned pages, photographs, handwriting, "
               "drawing tiles. Co-resident with the generalist inside 8 GB.",
     ),
+    ModelCard(
+        name="qwen3-4b", backend="ollama", backend_ref="qwen3:4b",
+        family="qwen3", role="generalist", prompt_adapter="qwen", modality="text",
+        ctx_max=32768, weights_mb=2500, est_vram_mb=3300, est_ram_mb=600,
+        # 36 layers x 8 KV heads x 128 head_dim x 2 x 2 bytes = 144 KB/token
+        kv_mb_per_1k=144.0,
+        caps={"text": 0.92, "vision": 0.0, "reasoning": 0.72, "coding": 0.66,
+              "extraction": 0.74, "long_context": 0.70, "tool_use": 0.78,
+              "speed": 0.92, "structured": 0.76},
+        enabled=False,
+        notes="Small tool-calling generalist that fits an 8 GB GPU with room for "
+              "its KV cache and no host-RAM spill: the model that keeps a "
+              "memory-tight workstation usable when the 20B cannot load.",
+    ),
+    ModelCard(
+        name="qwen3-vl-8b", backend="ollama", backend_ref="qwen3-vl:8b-instruct",
+        family="qwen3-vl", role="vision", prompt_adapter="chat", modality="vision",
+        ctx_max=32768, weights_mb=6140, est_vram_mb=6600, est_ram_mb=800,
+        # Qwen3-8B text stack: 36 layers x 8 KV heads x 128 head_dim x 2 x 2 bytes
+        kv_mb_per_1k=144.0,
+        caps={"text": 0.88, "vision": 0.95, "reasoning": 0.72, "coding": 0.55,
+              "extraction": 0.93, "long_context": 0.70, "tool_use": 0.65,
+              "speed": 0.60, "structured": 0.85},
+        enabled=False,
+        notes="Strongest open VLM that fits an 8 GB GPU whole: document OCR, "
+              "photographs, handwriting. The INSTRUCT build: the default "
+              "`qwen3-vl:8b` tag is the Thinking variant, which ignores think=false "
+              "and on a dense form spent its whole budget reasoning and returned "
+              "no transcription.",
+    ),
+    ModelCard(
+        name="granite3.2-vision-2b", backend="ollama",
+        backend_ref="granite3.2-vision:2b", family="granite-vision", role="vision",
+        prompt_adapter="chat", modality="vision", ctx_max=16384, weights_mb=2440,
+        est_vram_mb=3200, est_ram_mb=600,
+        # granite 3.1 2B: 40 layers x 8 KV heads x 64 head_dim x 2 x 2 bytes
+        kv_mb_per_1k=80.0,
+        caps={"text": 0.70, "vision": 0.88, "reasoning": 0.45, "coding": 0.20,
+              "extraction": 0.88, "long_context": 0.45, "tool_use": 0.35,
+              "speed": 0.85, "structured": 0.75},
+        enabled=False,
+        notes="Document-specialised VLM (forms, tables, charts). Its vision score "
+              "is a claim until the dirty-corpus evaluation measures it against "
+              "qwen2.5-vl on real scans, photographs and handwriting.",
+    ),
+    # -- the reference-server tier. Same code, different registry rows (§4):
+    # `sync_registry` enables each only if the backend actually serves it, so on
+    # an 8 GB laptop they are listed and disabled, and on a 48-80 GB server they
+    # are selected by the same capability scoring as everything else.
+    ModelCard(
+        name="gpt-oss-120b", backend="ollama", backend_ref="gpt-oss:120b",
+        family="gpt-oss", role="deep-reasoner", prompt_adapter="harmony",
+        modality="text", ctx_max=131072, weights_mb=65000, est_vram_mb=66000,
+        est_ram_mb=4000,
+        # 36 layers x 8 KV heads x 64 head_dim x 2 (K,V) x 2 bytes = 72 KB/token
+        kv_mb_per_1k=72.0,
+        caps={"text": 1.0, "vision": 0.0, "reasoning": 0.98, "coding": 0.93,
+              "extraction": 0.90, "long_context": 0.92, "tool_use": 0.90,
+              "speed": 0.35, "structured": 0.90},
+        enabled=False,
+        notes="117B MoE (5.1B active), MXFP4. The PS's reference-hardware model: "
+              "fits one 80 GB GPU, or part-offloads through llama.cpp's CPU-MoE "
+              "path. Requires the harmony adapter.",
+    ),
+    ModelCard(
+        name="qwen3-32b", backend="ollama", backend_ref="qwen3:32b",
+        family="qwen3", role="generalist", prompt_adapter="qwen", modality="text",
+        ctx_max=40960, weights_mb=20200, est_vram_mb=21500, est_ram_mb=1500,
+        # 64 layers x 8 KV heads x 128 head_dim x 2 x 2 bytes = 256 KB/token
+        kv_mb_per_1k=256.0,
+        caps={"text": 1.0, "vision": 0.0, "reasoning": 0.90, "coding": 0.84,
+              "extraction": 0.88, "long_context": 0.82, "tool_use": 0.90,
+              "speed": 0.55, "structured": 0.88},
+        enabled=False,
+        notes="Dense 32B generalist for a 24 GB+ GPU: the server-tier default for "
+              "extraction, drafting and multi-step tool use.",
+    ),
+    ModelCard(
+        name="qwen2.5-coder-32b", backend="ollama", backend_ref="qwen2.5-coder:32b",
+        family="qwen2.5", role="coder", prompt_adapter="chat", modality="text",
+        ctx_max=32768, weights_mb=19900, est_vram_mb=21000, est_ram_mb=1500,
+        kv_mb_per_1k=256.0,
+        caps={"text": 0.95, "vision": 0.0, "reasoning": 0.75, "coding": 0.94,
+              "extraction": 0.75, "long_context": 0.75, "tool_use": 0.70,
+              "speed": 0.55, "structured": 0.80},
+        enabled=False,
+        notes="Server-tier code model: internal tools, scripts and their tests.",
+    ),
+    ModelCard(
+        name="qwen2.5vl-7b", backend="ollama", backend_ref="qwen2.5vl:7b",
+        family="qwen2.5-vl", role="vision", prompt_adapter="chat", modality="vision",
+        ctx_max=32768, weights_mb=6000, est_vram_mb=7500, est_ram_mb=1200,
+        # 28 layers x 4 KV heads x 128 head_dim x 2 x 2 bytes = 56 KB/token
+        kv_mb_per_1k=56.0,
+        caps={"text": 0.78, "vision": 0.94, "reasoning": 0.60, "coding": 0.30,
+              "extraction": 0.90, "long_context": 0.55, "tool_use": 0.50,
+              "speed": 0.70, "structured": 0.78},
+        enabled=False,
+        notes="Stronger VLM for photographs and handwriting where VRAM allows.",
+    ),
 ]
+
+# Other names the same weights are published under. A fresh `ollama pull
+# gpt-oss:20b` on a cloud box serves "gpt-oss:20b", while this workstation
+# imported the GGUF as "gpt-oss-20b"; both are the same model, and refusing one
+# of them would disable the model on every deployment but this one.
+ALT_REFS: dict[str, tuple[str, ...]] = {
+    "gpt-oss-20b": ("gpt-oss:20b", "gpt-oss-20b:latest", "gpt-oss-20b"),
+    "gpt-oss-120b": ("gpt-oss:120b", "gpt-oss-120b:latest"),
+    "qwen3-8b": ("qwen3:8b", "qwen3:8b-q4_K_M"),
+    "qwen2.5-7b": ("qwen2.5:7b", "qwen2.5:7b-instruct"),
+    "qwen2.5vl-3b": ("qwen2.5vl:3b",),
+    "qwen2.5vl-7b": ("qwen2.5vl:7b",),
+    "qwen3-4b": ("qwen3:4b",),
+    # Deliberately not "qwen3-vl:8b": that tag is the Thinking build.
+    "qwen3-vl-8b": ("qwen3-vl:8b-instruct", "qwen3-vl:8b-instruct-q4_K_M"),
+    "granite3.2-vision-2b": ("granite3.2-vision:2b", "granite3.2-vision:latest"),
+    "qwen3-32b": ("qwen3:32b",),
+    "qwen2.5-coder-32b": ("qwen2.5-coder:32b",),
+}
 
 
 class ModelRegistry:
@@ -164,8 +326,29 @@ class ModelRegistry:
 
     # -- persistence ------------------------------------------------------
     def seed(self) -> None:
+        """Insert catalogue rows, and refresh shipped metadata on untouched ones.
+
+        This used to upsert every column on every sync, which silently undid
+        an administrator's edits and reset each row's `enabled` flag. A row an
+        admin has edited is theirs; a row nobody edited tracks the shipped
+        catalogue, except for `enabled`, which only the backend sync decides.
+        """
         for card in SEED:
-            db.upsert("model_registry", card.to_row(), key="name")
+            row = card.to_row()
+            existing = db.query_one(
+                "SELECT enabled, backend_ref, edited_by FROM model_registry "
+                "WHERE name=?", (card.name,))
+            if existing is None:
+                db.insert("model_registry", row)
+                continue
+            if existing["edited_by"]:
+                continue
+            # The shipped ref is written back every time: preserving the stored
+            # one meant a catalogue correction (qwen3-vl:8b -> the instruct
+            # build) could never reach an installed appliance. Sync runs right
+            # after seeding and re-resolves any alias the backend actually uses.
+            row.pop("enabled", None)
+            db.update("model_registry", "name", card.name, row)
         for extra in settings.backends.openai_compat_models:
             db.upsert("model_registry", ModelCard(
                 name=extra.replace("/", "-"), backend="openai_compat",
@@ -219,8 +402,20 @@ class ModelRegistry:
         return [c for c in self.all() if c.role == role]
 
     def vision_models(self) -> list[ModelCard]:
+        """Vision-capable models, best first — measured ones before claims.
+
+        A catalogue claim of 0.93 once outranked a measured 0.90, sending every
+        page to a model that could not even load here. A model is preferred on
+        its measurement; an unmeasured one follows every measured one until
+        `scripts/eval_dirty.py --record` has scored it.
+        """
         return sorted((c for c in self.all() if c.cap("vision") > 0.4),
-                      key=lambda c: -c.cap("vision"))
+                      key=lambda c: (c.cap_basis("vision") != "measured",
+                                     -c.cap("vision")))
+
+    def set_backend_ref(self, name: str, ref: str) -> None:
+        db.update("model_registry", "name", name, {"backend_ref": ref})
+        self.invalidate()
 
     def set_enabled(self, name: str, enabled: bool, reason: str = "") -> None:
         db.update("model_registry", "name", name,

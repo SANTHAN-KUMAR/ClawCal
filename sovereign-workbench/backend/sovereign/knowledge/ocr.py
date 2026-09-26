@@ -36,8 +36,169 @@ MIN_NATIVE_CHARS = 40        # below this a "text layer" is probably just a stam
 # put confidently wrong thickness readings into the evidence store, which is the
 # exact failure this system exists to prevent. Images therefore have to clear a
 # much higher bar before OCR is believed over the vision model.
-MIN_TESS_CONF = 45.0            # rendered pages of typed text
-MIN_TESS_CONF_IMAGE = 82.0      # photographs, handwriting, camera captures
+# Calibrated on the held-out dirty corpus (scripts/eval_dirty.py, OCR-only run),
+# not chosen: on 21 real FUNSD scans every page read at >= 70 mean confidence
+# recovered 62-96% of its words, while 11 of the 16 below 70 recovered under
+# half — including a fax-quality page at 54% that recovered 7%. The previous
+# 45 accepted exactly those pages.
+MIN_TESS_CONF = 70.0
+# Above this a rendered page of a scanned PDF is accepted on OCR alone, without
+# the VLM cross-check, so a 200-page scan does not cost 200 VLM calls.
+TRUST_TESS_CONF = 90.0
+# Kept for callers that report it; images now need the cross-check instead.
+MIN_TESS_CONF_IMAGE = MIN_TESS_CONF
+VLM_CTX_TOKENS = 6144
+
+# Two independent readers. A photographed receipt was read by Tesseract at 89%
+# mean confidence with two thirds of its values wrong: confidence alone cannot be
+# trusted on camera images at any threshold. OCR is ESTABLISHED only when an
+# independent VLM reading of the same image agrees with it; otherwise the VLM's
+# reading is used and labelled as interpretation.
+AGREE_MIN_WORDS = 0.75           # token-bag F1 between the two readings
+AGREE_MIN_NUMBERS = 0.90         # share of OCR's numbers the VLM also read
+
+
+def _crosscheck_mode() -> str:
+    import os
+    return os.environ.get("SOVEREIGN_OCR_CROSSCHECK", "auto").lower()
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+(?:[.,][0-9]+)?", (text or "").lower())
+
+
+def agreement(a: str, b: str) -> dict[str, float]:
+    """How far two independent readings of one image agree."""
+    from collections import Counter
+    ta, tb = Counter(_tokens(a)), Counter(_tokens(b))
+    hit = sum((ta & tb).values())
+    na, nb = sum(ta.values()), sum(tb.values())
+    f1 = 2 * hit / (na + nb) if (na + nb) else 0.0
+    nums_a = {t for t in ta if re.fullmatch(r"\d+(?:[.,]\d+)?", t)}
+    nums_b = {t for t in tb if re.fullmatch(r"\d+(?:[.,]\d+)?", t)}
+    # Symmetric: a number either reader saw must be seen by both. Checking only
+    # that OCR's numbers were confirmed let an OCR reading that had *dropped*
+    # a receipt's cash and change values be established as the page's text.
+    both = nums_a | nums_b
+    num = (len(nums_a & nums_b) / len(both)) if both else 1.0
+    return {"words": round(f1, 3), "numbers": round(num, 3)}
+
+
+_REFUSAL_PHRASES = re.compile(
+    r"\b(?:too\s+(?:blurry|small|low[- ]resolution|faint|dark|pixelated)|"
+    r"(?:cannot|can't|can\s+not|unable\s+to|not\s+able\s+to)\s+(?:be\s+)?"
+    r"(?:read|make\s+out|discern|transcribe|decipher)|(?:not|isn't|is\s+not)\s+"
+    r"(?:legible|readable|clear\s+enough)|illegible\s+(?:image|page|document))\b",
+    re.I)
+
+
+def degenerate(text: str) -> str | None:
+    """Why a VLM reading is not a transcription, or None.
+
+    A vision model shown something it cannot read does not always say so. It
+    may describe its difficulty in prose, or it may loop, emitting the same
+    phrase until its token budget runs out. Neither is a reading of the page,
+    and storing either as the page's text would make it citable.
+    """
+    t = (text or "").strip()
+    if not t:
+        return "empty"
+    head = t[:400]
+    if re.search(r"transcribe\s+all\s+text\s+visible|do\s+not\s+summari[sz]e,\s+do\s+not\s+"
+                 r"explain", head, re.I):
+        return "the model echoed its instructions instead of reading the image"
+    if _REFUSAL_PHRASES.search(head) and len(t) < 600:
+        return "the model said it could not read the image"
+    toks = re.findall(r"\S+", t.lower())
+    if len(toks) >= 40:
+        grams = [" ".join(toks[i:i + 4]) for i in range(len(toks) - 3)]
+        from collections import Counter
+        top, n = Counter(grams).most_common(1)[0]
+        if n * 4 / len(toks) > 0.35:
+            return f"the reading repeats itself ('{top}' x{n}), a model loop"
+        if len(set(toks)) / len(toks) < 0.12:
+            return "the reading is almost all repeated words, a model loop"
+    return None
+
+
+def _mostly_illegible(text: str) -> bool:
+    marks = len(re.findall(r"\[\s*illegible\s*\]", text or "", re.I))
+    words = len(re.findall(r"[A-Za-z0-9]+", re.sub(r"\[\s*illegible\s*\]", " ",
+                                                   text or "", flags=re.I)))
+    return marks >= 3 and marks > 0.3 * (words + marks)
+
+
+def _decide(pt: "PageText", img: Path, text: str, words: list["Word"], conf: float,
+            *, use_vlm: bool, vlm_model: str | None, hint: str,
+            trust_alone_at: float | None) -> "PageText":
+    """Choose between OCR and the VLM for one image, under the refusal contract.
+
+    tesseract                 OCR, confirmed by the VLM (or trusted alone above
+                              `trust_alone_at`): ESTABLISHED, with word geometry
+    vlm                       the VLM's reading: INTERPRETED, page-level only
+    tesseract-low-confidence  OCR only, no VLM to confirm it: DEGRADED
+    failed                    nothing readable: CANNOT DETERMINE
+    """
+    mode = _crosscheck_mode()
+    confident = bool(text) and conf >= MIN_TESS_CONF
+    alone = (confident and trust_alone_at is not None and conf >= trust_alone_at
+             and mode != "always") or (confident and mode == "never")
+    if alone:
+        pt.text, pt.words, pt.extractor, pt.confidence = text, words, "tesseract", conf
+        return pt
+
+    vtext = ""
+    if use_vlm:
+        vtext, _ = _vlm_read(img, hint=hint, model=vlm_model)
+    if vtext and confident:
+        ag = agreement(text, vtext)
+        if ag["words"] >= AGREE_MIN_WORDS and ag["numbers"] >= AGREE_MIN_NUMBERS:
+            pt.text, pt.words, pt.extractor, pt.confidence = text, words, "tesseract", conf
+            pt.error = (f"OCR ({conf:.0f}%) confirmed by an independent VLM reading "
+                        f"(word agreement {ag['words']:.0%}, numbers {ag['numbers']:.0%})")
+            return pt
+        pt.error = (f"OCR ({conf:.0f}%) and the VLM disagree (words {ag['words']:.0%}, "
+                    f"numbers {ag['numbers']:.0%}); the VLM's reading is used and "
+                    f"marked as interpretation")
+    why_degenerate = degenerate(vtext) if vtext else None
+    if vtext and why_degenerate and why_degenerate != "empty":
+        pt.ok = False
+        pt.extractor = "failed"
+        pt.error = (f"the vision model's output is not a transcription: "
+                    f"{why_degenerate}. Nothing on this page is established; "
+                    f"the page image is kept for an engineer to read")
+        return pt
+    if vtext and _mostly_illegible(vtext):
+        # The model itself says it cannot read the page. That is a refusal, not
+        # an interpretation with holes in it.
+        pt.ok = False
+        pt.extractor = "failed"
+        pt.error = ("the vision model marked most of this page [illegible]; it "
+                    "cannot be read, and nothing on it is established")
+        return pt
+    if vtext:
+        pt.text, pt.extractor, pt.confidence = vtext, "vlm", 60.0
+        # OCR words stay only as geometry hints for highlighting, never as text.
+        pt.words = [w for w in words if w.conf >= 60]
+        if not pt.error and text:
+            pt.error = (f"OCR confidence {conf:.0f}% is below the calibrated "
+                        f"{MIN_TESS_CONF:.0f}%; the VLM's reading is used and marked "
+                        f"as interpretation")
+        return pt
+    if text and conf >= 45.0:
+        pt.text, pt.words = text, words
+        pt.extractor = "tesseract-low-confidence"
+        pt.confidence = conf
+        pt.error = (f"only OCR was available and it could not be confirmed "
+                    f"({conf:.0f}% mean confidence"
+                    + ("" if confident else f", below the calibrated {MIN_TESS_CONF:.0f}%")
+                    + "); treat every value on this page as unverified")
+        return pt
+    pt.ok = False
+    pt.extractor = "failed"
+    pt.error = (f"OCR confidence {conf:.0f}% and no readable VLM transcription; "
+                f"the page could not be read")
+    return pt
 
 
 @dataclass
@@ -110,16 +271,19 @@ def _tesseract_tsv(image_path: Path, psm: int = 3) -> tuple[str, list[Word], flo
         return text, words, mean_conf
 
 
-def _vlm_read(image_path: Path, hint: str = "") -> tuple[str, float]:
+def _vlm_read(image_path: Path, hint: str = "",
+              model: str | None = None) -> tuple[str, float]:
     """Last-resort read with the local vision model. No geometry, so page-level only."""
     from ..gateway import gateway
     from ..gateway.base import GenRequest
     from ..gateway.registry import registry
 
     vision = registry.vision_models()
+    if model:
+        vision = [c for c in vision if c.name == model] or \
+            [c for c in [registry.get(model)] if c]
     if not vision:
         return "", 0.0
-    card = vision[0]
     prompt = (
         "Transcribe all text visible in this page image, preserving reading order, "
         "table rows and numbers exactly. Do not summarise, do not explain, do not "
@@ -129,14 +293,44 @@ def _vlm_read(image_path: Path, hint: str = "") -> tuple[str, float]:
     if hint:
         prompt += f"\n\nContext: {hint}"
     msg = gateway.image_message("user", prompt, [image_path])
-    res = gateway.generate(
-        GenRequest(messages=[msg], model=card.name, temperature=0.0,
-                   max_tokens=1800, timeout_s=600),
-        allow_fallback=False)
-    if not res.ok or not res.text.strip():
-        return "", 0.0
-    # A VLM transcription is never as trustworthy as OCR with geometry.
-    return res.text.strip(), 60.0
+    # Best measured reader first; if it cannot run here (memory refused it, its
+    # breaker is open), the next that can. Asking only the best one meant a page
+    # degraded to unconfirmed OCR while a smaller reader sat idle.
+    for card in vision:
+        res = gateway.generate(
+            # An explicit, modest context: an image costs ~1-2K tokens and the
+            # transcription up to 1.8K. Left at the default, the KV cache for an
+            # 8B VLM alone overflows an 8 GB GPU into host RAM.
+            GenRequest(messages=[msg], model=card.name, temperature=0.0,
+                       max_tokens=1800, timeout_s=600, ctx_tokens=VLM_CTX_TOKENS,
+                       reasoning="off"),
+            allow_fallback=False)
+        if res.ok and res.text.strip():
+            # A VLM transcription is never as trustworthy as OCR with geometry.
+            return _strip_preamble(res.text.strip()), 60.0
+        if not _unavailable(res.error):
+            return "", 0.0          # it ran and failed: do not shop for an answer
+    return "", 0.0
+
+
+def _unavailable(error: str | None) -> bool:
+    """The reader could not run at all, as opposed to running and failing."""
+    e = (error or "").lower()
+    return any(k in e for k in ("insufficient memory", "host ram", "breaker",
+                                "not loading", "unknown model", "all compatible"))
+
+
+_PREAMBLE = re.compile(r"^(?:(?:sure|certainly|of course)[,!.]?\s*)?(?:here\s+is|here's|"
+                       r"below\s+is)\s+(?:the\s+)?(?:full\s+|complete\s+|exact\s+)?"
+                       r"(?:transcription|text|transcribed\s+text)[^:\n]{0,40}:\s*", re.I)
+
+
+def _strip_preamble(text: str) -> str:
+    """Drop chat framing a model adds around a transcription, and code fences."""
+    t = _PREAMBLE.sub("", text, count=1)
+    t = re.sub(r"^```[a-z]*\s*\n", "", t)
+    t = re.sub(r"\n```\s*$", "", t)
+    return t.strip()
 
 
 def render_page(doc: Any, page_no: int, out_dir: Path, dpi: int = RENDER_DPI) -> Path:
@@ -176,42 +370,24 @@ def extract_pdf(path: Path, doc_id: str, *, use_vlm: bool = True,
                 pages.append(pt)
                 continue
 
-            # -- tier 2: OCR
+            # -- tiers 2 and 3: OCR, cross-checked by the VLM where it matters
             img = render_page(doc, i, out_dir)
             pt.image_path = str(img)
             scale = RENDER_DPI / 72.0
             text, words, conf = _tesseract_tsv(img)
-            if text and conf >= MIN_TESS_CONF:
-                # Map pixel geometry back to PDF points so regions overlay correctly.
-                pt.text = text
-                pt.words = [Word(w.text, w.x0 / scale, w.y0 / scale,
-                                 w.x1 / scale, w.y1 / scale, w.conf) for w in words]
-                pt.extractor = "tesseract"
-                pt.confidence = conf
-                pages.append(pt)
-                continue
-
-            # -- tier 3: VLM
-            if use_vlm:
-                vtext, vconf = _vlm_read(img)
-                if vtext:
-                    pt.text = vtext
-                    pt.extractor = "vlm"
-                    pt.confidence = vconf
-                    pages.append(pt)
-                    continue
-
-            pt.ok = False
-            pt.extractor = "failed"
-            pt.error = (f"no text layer, tesseract confidence {conf:.0f} below "
-                        f"{MIN_TESS_CONF}, and the vision model returned nothing")
-            pages.append(pt)
+            # Word geometry back into PDF points, so regions overlay correctly.
+            words = [Word(w.text, w.x0 / scale, w.y0 / scale,
+                          w.x1 / scale, w.y1 / scale, w.conf) for w in words]
+            pages.append(_decide(pt, img, text, words, conf, use_vlm=use_vlm,
+                                 vlm_model=None, hint="",
+                                 trust_alone_at=TRUST_TESS_CONF))
     finally:
         doc.close()
     return pages
 
 
-def extract_image(path: Path, doc_id: str, *, use_vlm: bool = True) -> list[PageText]:
+def extract_image(path: Path, doc_id: str, *, use_vlm: bool = True,
+                  vlm_model: str | None = None) -> list[PageText]:
     from PIL import Image
 
     out_dir = EVIDENCE_DIR / doc_id
@@ -225,43 +401,13 @@ def extract_image(path: Path, doc_id: str, *, use_vlm: bool = True) -> list[Page
     pt = PageText(page_no=1, text="", width=float(w), height=float(h),
                   image_path=str(dest))
     text, words, conf = _tesseract_tsv(dest)
-    if text and conf >= MIN_TESS_CONF_IMAGE:
-        pt.text, pt.words, pt.extractor, pt.confidence = text, words, "tesseract", conf
-        return [pt]
-
-    if use_vlm:
-        vtext, vconf = _vlm_read(
-            dest, hint="This is a photograph or a handwritten note. Transcribe "
-                       "every number exactly as written.")
-        if vtext:
-            pt.text, pt.extractor, pt.confidence = vtext, "vlm", vconf
-            # Keep the OCR words as weak geometry hints for region highlighting,
-            # but never as the text of record: they are what was rejected.
-            pt.words = [w for w in words if w.conf >= 60]
-            if text and conf >= MIN_TESS_CONF:
-                pt.error = (f"OCR read this at {conf:.0f}% mean confidence, below "
-                            f"the {MIN_TESS_CONF_IMAGE:.0f}% required for a "
-                            f"photograph or handwriting, so the vision model's "
-                            f"reading was used instead")
-            return [pt]
-
-    # OCR was not good enough and no vision model answered. If OCR produced
-    # something readable, return it clearly marked as low confidence rather than
-    # discarding the page — but never silently.
-    if text and conf >= MIN_TESS_CONF:
-        pt.text, pt.words = text, words
-        pt.extractor = "tesseract-low-confidence"
-        pt.confidence = conf
-        pt.error = (f"only OCR was available and its {conf:.0f}% confidence is "
-                    f"below the {MIN_TESS_CONF_IMAGE:.0f}% required for this input "
-                    f"type; treat every value on this page as unverified")
-        return [pt]
-
-    pt.ok = False
-    pt.extractor = "failed"
-    pt.error = (f"tesseract confidence {conf:.0f} is too low for a photograph or "
-                f"handwriting and no vision model was available")
-    return [pt]
+    # A standalone image is always cross-checked: this is where a confident,
+    # wrong OCR reading was measured.
+    return [_decide(pt, dest, text, words, conf, use_vlm=use_vlm,
+                    vlm_model=vlm_model,
+                    hint="This may be a photograph, a scan or a handwritten note. "
+                         "Transcribe every number exactly as written.",
+                    trust_alone_at=None)]
 
 
 def extract_xlsx(path: Path) -> list[PageText]:

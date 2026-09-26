@@ -95,3 +95,15 @@ def test_claims_are_persisted_with_their_class(task_id):
     pv.classify_text("The corrosion allowance is 3.7 mm.", ctx(), task_id=task_id)
     rows = db.query("SELECT ev_class FROM claims WHERE task_id=?", (task_id,))
     assert any(r["ev_class"] == "D" for r in rows)
+
+
+def test_a_number_from_a_document_outside_the_working_set_is_not_established():
+    from sovereign.evidence import provenance
+    ctx = provenance.EvidenceContext(
+        passages=[{"text": "Design pressure 12.0 bar g", "doc_id": "doc-other",
+                   "doc_title": "IR-2026-0731", "page_no": 1, "chunk_id": "c1"}],
+        working_set={"doc-attached"})
+    r = provenance.classify_text("The design pressure is 12.0 bar g.", ctx)
+    assert r.verdicts[0].ev_class == "C" and "IR-2026-0731" in r.verdicts[0].rationale
+    same = provenance.EvidenceContext(passages=ctx.passages, working_set={"doc-other"})
+    assert provenance.classify_text("It is 12.0 bar g.", same).verdicts[0].ev_class == "A"

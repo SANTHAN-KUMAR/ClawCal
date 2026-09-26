@@ -28,6 +28,7 @@ class ResidentEntry:
     since: float
     vram_mb: float
     gpu_fraction: float = 1.0
+    cpu_mb: float = 0.0              # the part the backend placed in host RAM
     pinned_until: float = 0.0
     tasks_served: int = 0
     last_used: float = field(default_factory=time.time)
@@ -45,6 +46,10 @@ class ResidencyPlan:
     load_cost_s: float = 0.0
     vram_after_mb: float = 0.0
     already_resident: bool = False
+    # The shortfall is host RAM, not VRAM. RAM is shared with everything else on
+    # the machine, so it can free up by itself; but a smaller model that fits
+    # now is better than waiting for one that does not.
+    ram_bound: bool = False
     # Whether waiting could ever change the answer. An infeasible plan with
     # nothing resident to evict will still be infeasible in an hour, so queueing
     # on it is a deadlock rather than back-pressure — the scheduler needs to
@@ -57,6 +62,11 @@ class ResidencyManager:
         self._lock = threading.RLock()
         self._entries: dict[str, ResidentEntry] = {}
         self._transitions: list[dict[str, Any]] = []
+        # When VRAM was first seen held by no resident model. A backend reports
+        # an unload before the GPU releases the memory, so for a while the
+        # memory looks "foreign"; treating it as permanent rejected a task that
+        # would have fitted three seconds later.
+        self._unattributed_since: float | None = None
 
     # -- observation ------------------------------------------------------
     def refresh(self) -> dict[str, ResidentEntry]:
@@ -73,6 +83,7 @@ class ResidencyManager:
                     since=prev.since if prev else time.time(),
                     vram_mb=m.get("vram_mb", 0.0),
                     gpu_fraction=m.get("gpu_fraction", 1.0),
+                    cpu_mb=m.get("cpu_mb", 0.0) or 0.0,
                     pinned_until=prev.pinned_until if prev else 0.0,
                     tasks_served=prev.tasks_served if prev else 0,
                     last_used=prev.last_used if prev else time.time(),
@@ -126,6 +137,13 @@ class ResidencyManager:
             # another tenant) is genuinely unavailable.
             foreign = max(0.0, snap["gpu"].get("used_mb", 0.0) - ours)
             headroom = max(0.0, usable - foreign - ours)
+            if foreign > 512:
+                if self._unattributed_since is None:
+                    self._unattributed_since = time.time()
+            else:
+                self._unattributed_since = None
+            in_transition = (self._unattributed_since is not None
+                             and time.time() - self._unattributed_since < 60.0)
 
             if card.name in entries:
                 e = entries[card.name]
@@ -135,24 +153,14 @@ class ResidencyManager:
                                      already_resident=True,
                                      vram_after_mb=snap["free_vram_mb"])
 
-            # gpt-oss-class models exceed VRAM by design and run part-offloaded;
-            # for those the binding constraint is host RAM, not VRAM.
-            spill = max(0.0, need - snap["usable_vram_mb"])
-            if spill > 0:
-                free_ram = snap["memory"].get("available_mb", 0.0)
-                if spill > free_ram:
-                    return ResidencyPlan(
-                        False,
-                        f"{card.name} needs about {need:.0f} MB; VRAM can hold "
-                        f"{snap['usable_vram_mb']:.0f} MB and the remaining "
-                        f"{spill:.0f} MB would spill to host RAM, of which only "
-                        f"{free_ram:.0f} MB is available")
-
             fits = min(need, usable)
             if fits <= headroom:
+                ok, why, _, _ = hardware.memory_verdict(card, headroom, snap)
+                if not ok:
+                    return ResidencyPlan(False, why, transient=True, ram_bound=True)
                 return ResidencyPlan(True,
                                      f"{card.name} fits in {headroom:.0f} MB of free "
-                                     f"VRAM without evicting anything",
+                                     f"VRAM without evicting anything; {why}",
                                      load_cost_s=card.cold_load_s,
                                      vram_after_mb=headroom - need)
 
@@ -173,6 +181,11 @@ class ResidencyManager:
                     break
 
             if headroom + reclaimed >= fits:
+                freed_ram = sum(entries[v].cpu_mb for v in victims if v in entries)
+                ok, why, _, _ = hardware.memory_verdict(
+                    card, headroom + reclaimed, snap, freed_ram_mb=freed_ram)
+                if not ok:
+                    return ResidencyPlan(False, why, transient=True, ram_bound=True)
                 evict_cost = sum(
                     (registry.get(v).cold_load_s if registry.get(v) else 0.0)
                     for v in victims)
@@ -189,7 +202,11 @@ class ResidencyManager:
             # will become evictable once its dwell expires. With nothing
             # resident, or nothing left under the dwell floor, the shortfall is
             # permanent and the caller must pick a different model.
-            transient = bool(blocked)
+            transient = bool(blocked) or in_transition
+            if in_transition and not blocked:
+                blocked.append(f"{foreign:.0f} MB of VRAM is held by no resident "
+                               f"model — a load or unload in progress, or another "
+                               f"process; re-checking")
             detail = ("; ".join(blocked) if blocked
                       else ("nothing is resident to evict, so waiting cannot free "
                             "any more" if not entries
@@ -236,31 +253,21 @@ class ResidencyManager:
             "model": card.name, "evicted": plan.evictions,
             "measured_s": total, "planned_s": round(plan.load_cost_s, 2),
             "reason": plan.reason})
+        from ..control import decisions
+        decisions.record("residency", "LOADED", plan.reason, subject_kind="model",
+                         subject_id=card.name, task_id=task_id,
+                         basis={"evicted": plan.evictions, "measured_s": total,
+                                "planned_s": round(plan.load_cost_s, 2),
+                                "planned_basis": _load_basis(card)})
         return total
 
     def _learn_load_cost(self, card: ModelCard, measured_s: float) -> None:
-        if measured_s < 0.4:            # already warm, not a real cold load
-            return
-        row = db.query_one("SELECT cold_load_s, samples FROM model_profiles WHERE model=?",
-                           (card.name,))
-        snap = hardware.snapshot()
         resident_mb = 0.0
         for m in gateway.resident():
             if (m.get("model") or m.get("name")) == card.name:
-                resident_mb = m.get("vram_mb", 0.0)
-        if row and row["cold_load_s"]:
-            n = max(1, row["samples"] or 1)
-            blended = (row["cold_load_s"] * n + measured_s) / (n + 1)
-            db.update("model_profiles", "model", card.name,
-                      {"cold_load_s": round(blended, 2),
-                       "vram_resident_mb": resident_mb or row["cold_load_s"]})
-        else:
-            db.upsert("model_profiles", {
-                "model": card.name, "cold_load_s": round(measured_s, 2),
-                "vram_resident_mb": resident_mb, "measured_at": time.time(),
-                "samples": 1}, key="model")
-        registry.invalidate()
-        _ = snap
+                resident_mb = float(m.get("vram_mb", 0.0) or 0.0)
+        from . import perfmodel
+        perfmodel.record_load(card.name, measured_s, resident_mb)
 
     def evict_all(self, reason: str = "operator requested") -> list[str]:
         evicted = []
@@ -322,6 +329,14 @@ class ResidencyManager:
 
         budget = min(card.ctx_max, max(2048, by_vram))
         return int(budget * settings.limits.kv_safety_factor)
+
+
+def _load_basis(card: ModelCard) -> str:
+    try:
+        from . import perfmodel
+        return perfmodel.metric(card, "cold_load_s")["basis"]
+    except Exception:
+        return "unknown"
 
 
 residency = ResidencyManager()

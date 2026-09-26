@@ -302,3 +302,159 @@ the anchor as well. This raises the bar and makes casual tampering visible; it i
 not a substitute for shipping the log off-box, which is what a deployment that
 must survive a hostile administrator requires. Stated here rather than implied.
 
+
+---
+
+## D-14 · The appliance becomes the node of a trust domain; nothing is replaced
+
+**Architecture v2 re-based (`sovereign-workbench-v2.md`) says:** a trust domain
+of one node, member devices and one policy; the agent loop moves to a native
+client; vLLM, Postgres, LiteLLM, gVisor and mTLS on the node.
+
+**Decision:** the existing control plane *is* the node. The new work enters it
+as an eighth authority (`trust`) behind the same façade, and every new surface
+is an adapter over something that already exists: the MCP tool server over the
+`ToolGateway`, `/v1` over the model gateway, `execute_remote` over the
+bubblewrap sandbox, the deliverable gate over the provenance classifier and the
+calculator. D-01 (SQLite), D-02 (the node's own harness) and D-11 (bubblewrap)
+stand. See `docs/trust-domain.md` §5 for every deviation.
+
+**Why:** the spec's invariant — compute and data never cross a boundary the
+organisation cannot revoke — is about *what the node knows and enforces*, not
+about which database or engine it uses. A parallel stack would have doubled the
+policy and audit surfaces the invariant depends on.
+
+**Cost:** one appliance per domain, as before; clustering the node remains a
+non-goal.
+
+---
+
+## D-15 · Device identity is proved at the application layer, not by mTLS
+
+**Decision:** a device is an Ed25519 key. Enrolment is signed by the key being
+enrolled; every standing-changing request is signed over
+`{purpose, device_id, ts, nonce, body}` (skew ±300 s, strictly increasing,
+purpose-bound); a lease token rides on ordinary requests and only the key
+renews it. TLS on :8443 is the terminator's job.
+
+**Why:** identity then survives any proxy in front of the node, and every task,
+tool call and audit row names the user *and* the device whatever the transport
+was. mTLS client-certificate state is not reliably visible to an ASGI app.
+
+**Cost:** a stolen lease token works until it expires (24 h attached) or the
+device is revoked; the key, not the token, is what the device must protect.
+
+---
+
+## D-16 · A grade is computed from facts the device cannot set
+
+**Decision:** `managed` is set by an admin; an attestation counts only when a
+verifier on the node marked it verified; the egress self-check is self-reported
+and so can never lift a device above C, only hold it at C or drop it to D.
+Clearance is enforced at retrieval, per tool call, from the grade read live.
+
+**Why:** the review found attestation is a ladder whose rungs mostly need a
+vendor's server (T11). Enforcement therefore stays on the node; attestation only
+moves the grade. Stopping rule 3 is the default: grade C attaches, retrieves
+`internal` at most, never runs detached.
+
+---
+
+## D-17 · The gate checks against what the node served, and lets models be wrong
+## in the shape of their input but not in their numbers
+
+**Decision:** every span the node hands out is recorded per session
+(`served_spans`). The deliverable gate resolves every number, equipment tag and
+date to a served span (correcting a wrong citation), or to a verified
+calculation, or strips it. The `deliver` tool accepts the shapes models actually
+send — `{title, content}` prose with inline `(span_id=…)` citations — and
+refuses loudly when it can find no claims at all.
+
+**Why:** found live. A qwen3-8b run sent `{title, content}` sections; the first
+version of the tool silently wrote a near-empty note. Silence is the one outcome
+a deliverable tool must never produce. The same run showed the gate stripping a
+vessel tag and an inspection date the model had invented.
+
+---
+
+## D-18 · The harness's startup deadline measures contact with the node, not output
+
+**Decision:** `clawcal attach` kills the harness if, within 60 s, it has neither
+emitted an event nor been seen by the node (a `/v1` or MCP call on the plan).
+
+**Why:** found live. `opencode run --format json` emits nothing until a model
+turn completes; a cold 8B model's first turn took ~120 s, and a deadline on
+first *output* killed a healthy harness. What the upstream hang (#38723) looks
+like is a harness that never reaches the node — which is what the deadline now
+detects.
+
+---
+
+## D-19 · TPM attestation verified natively, offline, with standard tools
+
+**Decision:** the node verifies TPM 2.0 attestation itself with `tpm2-tools` and
+`openssl`: EK certificate chain to vendor roots the organisation installs,
+MakeCredential/ActivateCredential to prove the attestation key lives in that
+TPM, and a PCR quote over a nonce bound to the device's Ed25519 key, compared
+with a baseline. Keylime remains a supported verifier, not a dependency.
+
+**Why:** the spec's reason for Keylime is that TPM 2.0 is the one rung that
+verifies offline. That property comes from the TPM protocol, not from Keylime's
+services, and the tools are already on every Linux node. The node computes the
+AK's name from its public area rather than accepting a PEM from the device;
+otherwise a device could activate the credential with a real TPM and sign
+quotes with a software key.
+
+**Cost:** vendor EK roots must be curated per fleet. Firmware TPMs that publish
+their EK certificate only online (some Intel PTT) cannot be enrolled on an
+air-gapped node without the organisation supplying the certificate.
+
+---
+
+## D-20 · The client harness is our own build, and the proof is the binary
+
+**Decision:** `bundle/opencode/patch.py` removes from the source, not the
+configuration, the models.dev fetch and its refresh loop, runtime npm installs,
+auto-update, share and `.well-known` remote config, and restricts providers to
+`node` and a loopback `local`. Every anchor is asserted, so an upstream bump
+that moves code fails the build rather than leaving a call site in.
+
+**Why:** measured, with egress open and no disable flags. Upstream 1.16.2
+reached Cloudflare-hosted services and hung for 275 s (the spec's T10). The
+patched build made 100 of 100 cold starts touching nothing but loopback. Given
+a config naming OpenAI, a disguised OpenAI-compatible cloud endpoint and a
+remote "local", upstream offered all of them; ours offered only the node.
+
+**Cost:** a rebuild and re-verification on every upstream bump. The web UI is
+not embedded (`--skip-embed-web-ui`); the headless `run` path does not use it.
+
+---
+
+## D-21 · Instrument slices: export is serving, and one gate runs in two places
+
+**Decision:** a slice is the node's own served set, exported: it is recorded as
+served to the slice's session. It is encrypted to the device key (X25519 +
+ChaCha20-Poly1305, pure Python, checked against RFC 7748/8439 vectors) and
+bound to the lease's grace deadline. It is gated off-site by
+`evidence/gatecore.py`, the node's gate rules factored into a standard-library
+module and vendored into the client. On rejoin the node re-gates the same
+claims and writes the .docx.
+
+**Why:** the spec requires B3 off-site "for those documents alone" without the
+client carrying Docling or OCR. Making export itself count as serving means the
+rule needs no off-site exception. Sharing the gate's code, rather than
+re-writing it in the client, is what makes "the node agrees on rejoin" true.
+In the live run the node's counts matched the device's exactly.
+
+---
+
+## D-22 · Detached admission happens on the device
+
+**Decision:** when the lease is detached, `clawcal plan|attach` admits locally,
+from the signed manifest (the allowed task classes, the pinned model), with a
+small deterministic rule set. Each decision is written to the chained log.
+
+**Why:** found while building the detached path. Admission was a node call, and
+a detached device is by definition away from the node. The decision still
+follows the node's rules: the node signed the manifest that bounds it, and
+the node sees every decision on rejoin.

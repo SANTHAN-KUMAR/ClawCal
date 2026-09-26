@@ -137,6 +137,17 @@ def ingest_file(path: str | Path, *, title: str | None = None,
     existing = db.query_one(
         "SELECT id, title, pages, status, doc_class FROM documents WHERE sha256=?",
         (digest,))
+    degraded_before = bool(existing) and bool(db.query_one(
+        "SELECT 1 FROM pages WHERE doc_id=? AND extractor IN "
+        "('tesseract-low-confidence','failed') LIMIT 1", (existing["id"],)))
+    if existing and existing["status"] == "READY" and degraded_before:
+        # Reusing a reading taken while a capability was unavailable (the VLM
+        # refused for memory, say) would keep the document degraded forever.
+        # Read it again; if the capability is back, the reading improves.
+        audit.record("knowledge", "degraded_ingest_retried",
+                     detail={"doc_id": existing["id"], "title": existing["title"]})
+        existing = dict(existing)
+        existing["status"] = "RETRY"
     if existing and existing["status"] == "READY":
         # Report the same shape a fresh ingest does. Returning a short form here
         # meant re-attaching a document the operator had already uploaded showed

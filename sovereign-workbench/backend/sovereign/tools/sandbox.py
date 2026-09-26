@@ -298,12 +298,19 @@ class SandboxTool(Tool):
                 f"engine: {res.get('engine')} (network: {res.get('network')})\n"
                 f"--- stdout ---\n{res.get('stdout', '')}\n"
                 f"--- stderr ---\n{res.get('stderr', '')}")
-        return ToolResult(res.get("ok", False), content=body,
-                          display=f"sandbox exit {res.get('exit_code')} in "
-                                  f"{res.get('duration_s')}s",
-                          error="" if res.get("ok") else
-                                (res.get("stderr") or "non-zero exit")[:400],
-                          meta=res)
+        out = ToolResult(res.get("ok", False), content=body,
+                         display=f"sandbox exit {res.get('exit_code')} in "
+                                 f"{res.get('duration_s')}s",
+                         error="" if res.get("ok") else
+                               (res.get("stderr") or "non-zero exit")[:400],
+                         meta=res)
+        if res.get("engine") not in ("bwrap", "unshare"):
+            # The code ran, but without a network namespace. That is a reduced
+            # mode the user must be told about, not something to infer.
+            out.outcome = "DEGRADED"
+            out.outcome_reason = (f"sandbox engine {res.get('engine')!r}: no "
+                                  f"network namespace isolation on this host")
+        return out
 
 
 EGRESS_PROBE = """
@@ -341,9 +348,16 @@ def egress_probe(task_id: str = "sovereignty-proof") -> dict[str, Any]:
         attempts = []
 
     leaked = [a for a in attempts if a.get("result") == "CONNECTED"]
+    from urllib.parse import urlsplit
     for a in attempts:
         target = str(a.get("target", ""))
-        host, _, port = target.rpartition(":")
+        if "://" in target:
+            # rpartition(":") on a URL records the scheme as the destination.
+            u = urlsplit(target)
+            host = u.hostname or target
+            port = str(u.port or {"https": 443, "http": 80}.get(u.scheme, ""))
+        else:
+            host, _, port = target.rpartition(":")
         egress.record_event(
             destination=host or target, port=int(port) if port.isdigit() else None,
             layer="sandbox-netns",

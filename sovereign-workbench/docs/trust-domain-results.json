@@ -1,0 +1,108 @@
+{
+ "ran_at": "2026-09-26 00:51:25",
+ "harness": true,
+ "results": [
+  {
+   "id": "T1",
+   "title": "client egress policy rejects (not drops), node reachable",
+   "status": "PASS",
+   "evidence": "before: INACTIVE egress is open: 1.1.1.1:443 accepted a connection | after: ACTIVE  every probe rejected in \u2264 1 ms; node reachable"
+  },
+  {
+   "id": "T2",
+   "title": "enrolment by key possession; graded by the node",
+   "status": "PASS",
+   "evidence": "enrolled dev-32bd6d8b55678276 (linux) to verify-domain |   node key   ac66:8436:d827:7c6f:cddd:2375  (compare with your admin) |   grade      C: unmanaged device; its claims are self-reported; egress self-check passing |   state      ACTIVE |   lease      attached, clearance public, internal"
+  },
+  {
+   "id": "T3",
+   "title": "TUF-style metadata verifies; the running client matches its signed target",
+   "status": "PASS",
+   "evidence": "verified: root v1, targets v3, snapshot v3 | client package verifies"
+  },
+  {
+   "id": "T4",
+   "title": "B5 classifies this machine; manifest signed, verified at launch",
+   "status": "PASS",
+   "evidence": "SPLIT-PCIE \u00b7 gpt-oss-20b (MXFP4) on llama.cpp, attached |   gpt-oss-20b needs about 13,515 MB (12,110 MB weights + 805 MB KV at 16,384 tokens + 600 MB runtime): more than the 7,488 MB of VRAM, but its attention and shared weights (1,931 MB) plus KV fit VRAM and its 10,179 MB of routed experts fit host RAM (13,630 MB after the reserve) |   warning: PCIe measures 15.8 GB/s (link-rated (generation \u00d7 width from the driver; not a transfer benchmark)); split decode is lane-starved below 16 GB/s \u2014 the \u00d78-slot trap"
+  },
+  {
+   "id": "T5",
+   "title": "an unmanaged device may not go detached (rule 3)",
+   "status": "PASS",
+   "evidence": "node refused: grade D may not run detached under this domain's policy (unmanaged device; its claims are self-reported; running detached, so evidence arrives only on rejoin). Detached work needs a managed, attested device"
+  },
+  {
+   "id": "T6",
+   "title": "B1 placement: extract always on the node; draft where the pinned model is",
+   "status": "PASS",
+   "evidence": "document_extraction \u2192 extract \u00b7 placement NODE \u00b7 grade C | deliverable_drafting \u2192 draft \u00b7 placement NODE \u00b7 grade C"
+  },
+  {
+   "id": "T7",
+   "title": "clearance enforced on the node; the gate keeps served values and strips an invented one",
+   "status": "PASS",
+   "evidence": "MCP 2025-06-18, grade C, confidential refused=True, gate {'kept': 1, 'stripped': 1, 'recited': 0, 'derived': 0}, report_MEMO-2026-117AB.docx"
+  },
+  {
+   "id": "T8",
+   "title": "opencode + a node model deliver the reference note unattended (rule 1: \u2265 3 of 5); offline clean",
+   "status": "PASS",
+   "evidence": "4 of 5 complete | run 1: COMPLETE \u2014 [ok] 263.9 s, tools: node-tools_extract_values, node-tools_deliver, node-tools_extract_values, node-tools_deliver, node-tools_extract_values, node-too; offline CLEAN | run 2: COMPLETE \u2014 [ok] 92.4 s, tools: node-tools_extract_values, node-tools_deliver; offline CLEAN | run 3: COMPLETE \u2014 [ok] 54.2 s, tools: node-tools_extract_values, node-tools_deliver; offline CLEAN | run 4: COMPLETE \u2014 [ok] 59.1 s, tools: node-tools_extract_values, node-tools_deliver; offline CLEAN | run 5: incomplete \u2014 [ok] 39.8 s, tools: node-tools_extract_values; offline CLEAN"
+  },
+  {
+   "id": "T9",
+   "title": "the device's chained log anchors on the node",
+   "status": "PASS",
+   "evidence": "anchored: 66 new entries, node anchor at 66"
+  },
+  {
+   "id": "T10",
+   "title": "an edited entry quarantines the device; only an operator clears it; the chain continues from a signed ack",
+   "status": "PASS",
+   "evidence": "node refused: device dev-32bd6d8b55678276 is quarantined after a tamper event; an operator must clear it before it may re-attach | anchored: 1 new entry, node anchor at 71\nrenewed: attached lease, grade C, clearance public, internal, expires 2026-09-27 00:50"
+  },
+  {
+   "id": "T11",
+   "title": "revocation stops the lease now and renewal next",
+   "status": "PASS",
+   "evidence": "node refused: device dev-32bd6d8b55678276 has been revoked: revoked by santhankumar: verify | node refused: dev-32bd6d8b55678276 is REVOKED: revoked by santhankumar: verify"
+  },
+  {
+   "id": "T13",
+   "title": "TPM attestation: EK chain, credential activation and quote verified on the node; managed device reaches A",
+   "status": "PASS",
+   "evidence": "TPM attestation verified by the node; baseline recorded; grade A: managed linux device; TPM quote verified by tpm2-native; egress self-check passing\nswtpm: Warning: Profile-enabled algorithms contain disabled 'RSA-1024-sign(SHA1, pkcs1-pss)'\nswtpm: Warning: Setting OPENSSL_ENABLE_SHA1_SIGNATURES=1"
+  },
+  {
+   "id": "T14",
+   "title": "detached manifest signed and bound to the lease; weights, engine and harness fetched and verified",
+   "status": "PASS",
+   "evidence": "renewed: attached lease, grade A, clearance public, internal, confidential, restricted, expires 2026-09-27 00:50 | FIT-FAST \u00b7 qwen3-4b (Q4_K_M) on llama.cpp, detached |   qwen3-4b needs about 5,513 MB (2,497 MB weights + 2,416 MB KV at 16,384 tokens + 600 MB runtime), which fits the 7,488 MB fast tier (measured VRAM less the display/CUDA reserve) |   task classes here: draft, calc |   never: --rpc"
+  },
+  {
+   "id": "T15",
+   "title": "detached: on-device admission, local engine, opencode; only loopback touched",
+   "status": "PASS",
+   "evidence": "[CLIENT] draft with qwen3-4b \u2014 draft runs on this device's own engine because it is detached; no node tools and no team corpus | [ok] 22.8 s, tools: read | run 1: CLEAN  exit 0  23.0 s  processes opencode-29fbff, python3"
+  },
+  {
+   "id": "T16",
+   "title": "instrument slice: encrypted to the device, gated offline, the node agrees on rejoin",
+   "status": "PASS",
+   "evidence": "slice slice-45324b59c923: 1 document(s), 15 spans, usable until 2026-10-11 00:50 | /home/santhankumar/.sovereign-td-verify/work2/clawcal-20260926-005124.html: 1 kept, 1 stripped; .docx queued for the node | node wrote report_MEMO-2026-A2EF6.docx: gate {'kept': 1, 'stripped': 1, 'recited': 0, 'derived': 0}"
+  },
+  {
+   "id": "T17",
+   "title": "the detached period anchors on rejoin",
+   "status": "PASS",
+   "evidence": "anchored: 27 new entries, node anchor at 27"
+  },
+  {
+   "id": "T12",
+   "title": "audit and decision chains verify on the node",
+   "status": "PASS",
+   "evidence": "audit 162 entries, decisions 77"
+  }
+ ]
+}

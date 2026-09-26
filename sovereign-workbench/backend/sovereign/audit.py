@@ -30,21 +30,36 @@ def record(category: str, action: str, *, outcome: str = "OK", actor: str = "sys
     """Append one audit row. Returns its hash."""
     detail_s = db.jdump(detail) if not isinstance(detail, (str, type(None))) else (detail or "")
     ts = db.now()
-    with _audit_lock:
-        last = db.query_one("SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1")
+    with _audit_lock, db.tx() as c:
+        last = c.execute(
+            "SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1").fetchone()
         prev = last["hash"] if last else GENESIS
         h = _digest(prev, ts, actor, task_id or "", category, action, outcome, detail_s)
-        db.insert("audit_log", {
-            "ts": ts, "actor": actor, "task_id": task_id, "category": category,
-            "action": action, "outcome": outcome, "detail": detail_s,
-            "prev_hash": prev, "hash": h,
-        })
-        row = db.query_one("SELECT COUNT(*) AS n, MAX(seq) AS m FROM audit_log")
-        db.upsert("audit_anchor", {"id": 1, "head": h, "entries": row["n"],
-                                   "max_seq": row["m"] or 0, "ts": ts}, key="id")
+        cur = c.execute(
+            "INSERT INTO audit_log (ts, actor, task_id, category, action, outcome, "
+            "detail, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?)",
+            (ts, actor, task_id, category, action, outcome, detail_s, prev, h))
+        # The anchor advances by one per row. Recounting the whole log on every
+        # write, as this did, costs O(n) per event and is the first thing to
+        # degrade on a busy appliance with a year of history. The incremental
+        # count is still checked against a full recount by verify_chain().
+        anchor = c.execute("SELECT entries FROM audit_anchor WHERE id=1").fetchone()
+        entries = (anchor["entries"] + 1) if anchor else c.execute(
+            "SELECT COUNT(*) AS n FROM audit_log").fetchone()["n"]
+        c.execute(
+            "INSERT INTO audit_anchor (id, head, entries, max_seq, ts) "
+            "VALUES (1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET head=excluded.head, "
+            "entries=excluded.entries, max_seq=excluded.max_seq, ts=excluded.ts",
+            (h, entries, cur.lastrowid, ts))
     bus.publish({"type": "audit", "category": category, "action": action,
                  "outcome": outcome, "task_id": task_id, "ts": ts})
     return h
+
+
+def head() -> str:
+    """The current chain head, from the anchor. O(1); embedded in artefacts."""
+    row = db.query_one("SELECT head FROM audit_anchor WHERE id=1")
+    return row["head"] if row else GENESIS
 
 
 def verify_chain() -> dict[str, Any]:

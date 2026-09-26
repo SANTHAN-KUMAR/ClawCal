@@ -166,6 +166,13 @@ def verify_inputs(values: dict[str, float], task_id: str | None
     for row in db.query("SELECT snippet FROM evidence WHERE task_id=?", (task_id,)):
         for m in re.finditer(r"\d+(?:\.\d+)?", row["snippet"] or ""):
             established.add(f"{float(m.group(0)):g}")
+    # What the node recorded serving to this task's session (evidence.served):
+    # the same record the deliverable gate checks against.
+    for row in db.query(
+            "SELECT s.text FROM served_spans s JOIN tasks t "
+            "ON s.session_id = t.conversation_id WHERE t.id=?", (task_id,)):
+        for m in re.finditer(r"\d+(?:\.\d+)?", row["text"] or ""):
+            established.add(f"{float(m.group(0)):g}")
     for row in db.query("SELECT result FROM calculations WHERE task_id=? AND ok=1",
                         (task_id,)):
         if row["result"] is not None:
@@ -307,8 +314,15 @@ class CalculatorTool(Tool):
                 f"passage that states each of them, check you have the right "
                 f"figure, and recompute. Do not proceed on a number you cannot "
                 f"cite.")
-        return ToolResult(True, content=content, display=display,
-                          meta={"calc_id": res["id"]})
+        out = ToolResult(True, content=content, display=display,
+                         meta={"calc_id": res["id"]})
+        if res["unverified_inputs"]:
+            # The arithmetic is right; the result is not established, because
+            # its inputs are not. That is a refusal, not a derived value.
+            out.outcome = "CANNOT_DETERMINE"
+            out.outcome_reason = ("inputs not established by any source: "
+                                  + ", ".join(res["unverified_inputs"]))
+        return out
 
 
 def task_calculations(task_id: str) -> list[dict[str, Any]]:

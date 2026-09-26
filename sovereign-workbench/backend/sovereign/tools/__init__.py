@@ -10,9 +10,11 @@ from .docgen import (ApprovalNoteTool, PresentationTool, ReportTool,
                      SpreadsheetTool)
 from .drawing import AnalyseDrawingTool, TraceConnectionTool
 from .files import ListFilesTool, ReadFileTool, WriteFileTool
+from .remote import DeliverTool, ExecuteRemoteTool, StageFilesTool
 from .sandbox import EgressProbeTool, SandboxTool, egress_probe, run_code
 from .search import (ExtractValuesTool, KnowledgeSearchTool,
                      ListDocumentsTool, ReadDocumentPageTool)
+from .spreadsheet import SpreadsheetEditTool, SpreadsheetReadTool
 
 _REGISTERED = False
 
@@ -27,6 +29,11 @@ def register_all() -> ToolGateway:
         SandboxTool(), AnalyseDrawingTool(), TraceConnectionTool(),
         ApprovalNoteTool(), ReportTool(), SpreadsheetTool(), PresentationTool(),
         RequestApprovalTool(), EgressProbeTool(),
+        SpreadsheetReadTool(), SpreadsheetEditTool(),
+        # The node's side of attached mode (sovereign-workbench-v2.md §12,
+        # §13): reached by a client harness over MCP, never by the node's own
+        # workflows.
+        StageFilesTool(), ExecuteRemoteTool(), DeliverTool(),
     ):
         tools.register(tool)
     _REGISTERED = True

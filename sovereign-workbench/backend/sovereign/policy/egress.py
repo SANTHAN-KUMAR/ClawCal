@@ -102,6 +102,14 @@ def record_event(*, destination: str, port: int | None, layer: str, result: str,
     audit.bus.publish({"type": "network_event", "id": eid, "destination": destination,
                        "port": port, "layer": layer, "result": result,
                        "task_id": task_id, "process": process})
+    from ..control import decisions
+    decisions.record("sovereignty", result,
+                     f"{layer}: {destination}:{port or '-'} {result.lower()}"
+                     + (f" — {detail[:200]}" if detail else ""),
+                     subject_kind="network_event", subject_id=eid, task_id=task_id,
+                     basis={"layer": layer, "destination": destination,
+                            "port": port, "process": process,
+                            "policy": "DEFAULT_DENY"})
     return eid
 
 

@@ -73,14 +73,26 @@ installed, which matters for the sovereignty story.
 # install Ollama if you don't have it: https://ollama.com/download
 ollama serve &
 
-ollama pull qwen3:8b          # general reasoning / chat
-ollama pull qwen2.5:7b        # lighter/faster general tasks
-ollama pull qwen2.5vl:3b      # vision (scanned docs, drawings, photos)
-ollama pull gpt-oss-20b       # optional — deep reasoning, needs more RAM/VRAM
+ollama pull qwen3:8b             # agent / generalist: fits 8 GB VRAM whole
+ollama pull qwen3:4b             # fast generalist for summaries and small GPUs
+ollama pull qwen3-vl:8b-instruct # vision: scans, photos, handwriting (best measured)
+ollama pull gpt-oss:20b          # optional deep reasoner; needs ~6 GB of free host RAM
 ```
 
-On an 8 GB GPU, `gpt-oss-20b` partially offloads to CPU — it still works, just
-slower. Skip it if your machine has under 16 GB RAM total.
+Two things measured the hard way:
+
+* **Pull `qwen3-vl:8b-instruct`, not `qwen3-vl:8b`.** The plain tag is the
+  *Thinking* build. On a dense page it spends its whole budget reasoning and
+  returns no transcription.
+* **Models are chosen to fit VRAM whole.** `gpt-oss-20b` on an 8 GB GPU puts
+  about 5 GB in host RAM. The workbench refuses that load when the RAM is not
+  free ("waiting for host memory"), rather than let the OOM killer take your
+  desktop, which it did on the development machine. `./ops/install.sh --models
+  auto` picks the right set for your GPU.
+
+Models on more than one Ollama server (for example a second one whose weights
+live on a disk with space) are one backend:
+`export OLLAMA_URLS=http://127.0.0.1:11434,http://127.0.0.1:11435`.
 
 **Verify:** `curl http://127.0.0.1:11434/api/tags` should list the models above.
 
@@ -96,6 +108,9 @@ sandbox engine, OCR) without starting the server — use it to catch a missing
 dependency before the demo, not during it.
 
 ## 6. Start the workbench
+
+Easiest, and what a server uses: `./ops/install.sh --user` (workstation) or
+`sudo ./ops/install.sh` (server; see `docs/deployment.md`). By hand:
 
 ```bash
 ./run.sh
@@ -125,12 +140,58 @@ process on the box, not just ones the control plane owns.
 ## 8. Prove it works
 
 ```bash
-python3 scripts/verify_e2e.py            # all 21 acceptance criteria, nothing mocked
+python3 scripts/verify_e2e.py            # all 27 acceptance criteria, nothing mocked
+./clawcal selftest --report              # signed sovereignty report (verify: ./clawcal verify <pdf>)
+python3 scripts/fetch_dirty_corpus.py    # real, dirty documents with ground truth
+python3 scripts/eval_dirty.py --truth-only --record   # how the pipeline does on them
 python3 scripts/benchmark_scheduling.py  # residency-aware vs naive scheduling
 ```
 
 `verify_e2e.py` is slow (several minutes) because it runs real inference for
 each check — that's the point, nothing here is a stub.
+
+---
+
+## 9. (Optional) Join a laptop to the node — the trust domain
+
+This turns the workbench into the **node** of a trust domain, and a second
+machine into a **member device**. The design is in `sovereign-workbench-v2.md`;
+what was built is in `docs/trust-domain.md`.
+
+On the node, which must be reachable by the laptop, so token auth is on:
+
+```bash
+SOVEREIGN_AUTH=token SOVEREIGN_HOST=0.0.0.0 SOVEREIGN_PUBLIC_URL=http://<node-ip>:8794 ./run.sh
+python3 scripts/trustctl.py publish-client       # the signed client package
+python3 scripts/trustctl.py health               # what is not ready yet, and what to do
+```
+
+Then create a user for the laptop's owner (Admin → users, or `POST /api/admin/principals`).
+
+On the laptop, which needs only Python 3.10+ with no packages:
+
+```bash
+curl -H "Authorization: Bearer <token>" http://<node-ip>:8794/api/bundles/targets/client/clawcal.zip -o clawcal.zip
+export PYTHONPATH=$PWD/clawcal.zip CLAWCAL_URL=http://<node-ip>:8794 CLAWCAL_TOKEN=<token>
+sudo -E python3 -m clawcal device egress apply  # reject everything except the node
+python3 -m clawcal device enrol                 # compare the node key it prints with the admin's
+python3 -m clawcal device manifest              # what this machine can run, and why
+python3 -m clawcal attach "draft an approval note for IR-2026-0731"
+python3 -m clawcal device status                # grade, lease, anchor, what it cannot do here
+```
+
+**How to tell it worked:** Admin → Security → *Member devices* lists the laptop
+with its grade. `clawcal device sync` prints `anchored: N new entries`.
+
+To prove all of it end to end on one machine without root, where `pasta` is
+installed:
+
+```bash
+python3 scripts/verify_trust_domain.py --harness
+```
+
+That runs checks T1–T17; add `--engine-dir`, `--detached-weights` and
+`--harness-bin` for the detached checks.
 
 ---
 

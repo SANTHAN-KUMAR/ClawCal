@@ -221,7 +221,15 @@ class TestAttachmentIsUsed:
                             "pages": 2, "kind": "document"}])
         msg = h._opening_message()
         assert "doc-abc123" in msg
-        assert "read_document_page" in msg
+        # A workbook is opened as a workbook: cells with headers and formulas,
+        # not a page of flattened text.
+        assert "spreadsheet_read" in msg
+
+    def test_a_pdf_attachment_is_opened_as_pages(self):
+        h = self._harness([{"doc_id": "doc-pdf1", "title": "IR-0731.pdf",
+                            "pages": 3, "kind": "document"}])
+        msg = h._opening_message()
+        assert "doc-pdf1" in msg and "read_document_page" in msg
         assert "do not call list_files" in msg.lower()
 
     def test_a_drawing_attachment_points_at_the_drawing_tool(self):
@@ -241,3 +249,16 @@ class TestAttachmentIsUsed:
         tools = [t for t in TOOLSETS["general"] if t not in ("list_files", "read_file")] \
             if db.jload(task["attachments"], []) else granted
         assert "list_files" not in tools and "read_document_page" in tools
+
+
+def test_a_degraded_reading_is_retried_not_reused(corpus_dir):
+    import pytest
+    from sovereign import db
+    from sovereign.knowledge import ingest
+    photo = corpus_dir / "photos" / "nameplate-V-204-photo.jpg"
+    first = ingest.ingest_file(photo, use_vlm=False)          # no VLM: cannot confirm
+    ext = db.query_one("SELECT extractor FROM pages WHERE doc_id=?", (first["doc_id"],))
+    if ext["extractor"] not in ("tesseract-low-confidence", "failed"):
+        pytest.skip(f"this photo read as {ext['extractor']} here")
+    again = ingest.ingest_file(photo, use_vlm=False)
+    assert again.get("reused") is False                       # read again, not cached

@@ -206,3 +206,11 @@ class TestAuditChain:
             assert q.get(timeout=2)["category"] == "test"
         finally:
             audit.bus.unsubscribe(q)
+
+
+def test_configured_backend_ports_are_allowed_and_others_are_not(monkeypatch):
+    from sovereign import config
+    monkeypatch.setenv("OLLAMA_URLS", "http://127.0.0.1:11434,http://127.0.0.1:11435")
+    monkeypatch.setenv("LLAMACPP_URL", "http://10.0.0.9:8081")        # not loopback
+    ports = config._backend_ports()
+    assert 11435 in ports and 8081 not in ports

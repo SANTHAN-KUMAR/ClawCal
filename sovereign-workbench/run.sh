@@ -11,13 +11,24 @@ echo "Sovereign On-Premise AI Workbench"
 echo "---------------------------------"
 
 # The inference backend has to be up; everything else degrades gracefully.
-if ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-  echo "  Ollama is not responding on 127.0.0.1:11434."
-  echo "  Start it with:  ollama serve &"
-  echo "  (or point the gateway elsewhere with OLLAMA_URL / OPENAI_COMPAT_URL)"
+# OLLAMA_URLS may name several servers (models on different disks, or hosts).
+URLS="${OLLAMA_URLS:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
+up=0
+IFS=',' read -ra EPS <<<"$URLS"
+for u in "${EPS[@]}"; do
+  if curl -sf "${u%/}/api/version" >/dev/null 2>&1; then
+    n=$(curl -sf "${u%/}/api/tags" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("models", [])))' 2>/dev/null || echo "?")
+    say "inference backend" "up: $u ($n models)"; up=$((up + 1))
+  else
+    say "inference backend" "DOWN: $u"
+  fi
+done
+if [ "$up" -eq 0 ]; then
+  echo "  No Ollama endpoint is responding. Start one with:  ollama serve &"
+  echo "  (or set OLLAMA_URLS / OPENAI_COMPAT_URL)"
   exit 1
 fi
-say "inference backend" "up"
+export OLLAMA_URLS="$URLS"
 
 command -v tesseract >/dev/null && say "OCR" "$(tesseract --version 2>&1 | head -1)" \
   || say "OCR" "tesseract MISSING — scanned documents will fail"
@@ -44,4 +55,6 @@ fi
 say "corpus" "present"
 
 echo
-exec python3 -m sovereign.server "$@"
+PY="${SOVEREIGN_PYTHON:-}"
+[ -z "$PY" ] && [ -x "$HOME/.sovereign/venv/bin/python" ] && PY="$HOME/.sovereign/venv/bin/python"
+exec "${PY:-python3}" -m sovereign.server "$@"

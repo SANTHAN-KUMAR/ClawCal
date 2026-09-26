@@ -22,9 +22,16 @@ from .calculator import task_calculations
 
 
 def _context(ctx: ToolContext) -> provenance.EvidenceContext:
+    # What this task holds in memory, plus what the node recorded serving to
+    # the session — the same record the gate checks a client harness against,
+    # so an internal and an external loop are held to one rule.
+    from ..evidence import served
     return provenance.EvidenceContext(
-        passages=ctx.scratch.get("passages", []),
-        calculations=task_calculations(ctx.task_id))
+        passages=list(ctx.scratch.get("passages", []))
+        + served.passages(session_id=ctx.session_id, task_id=ctx.task_id),
+        calculations=task_calculations(ctx.task_id),
+        working_set={a["doc_id"] for a in ctx.scratch.get("attachments", [])
+                     if a.get("doc_id")})
 
 
 def _check(text: str, ctx: ToolContext) -> tuple[str, dict[str, Any]]:
@@ -83,6 +90,35 @@ def _enforce_provenance(verdicts: list[dict[str, Any]], ctx: ToolContext,
             f"depended on one of these numbers -- if the value changes, the "
             f"verdict may change with it."),
         meta={"unsupported": unsupported, "attempt": attempts + 1})
+
+
+def _deliverable(res: ToolResult, verdicts: list[dict[str, Any]]) -> ToolResult:
+    """An artefact's outcome is the worst evidence class it carries."""
+    classes = {v.get("class") for v in verdicts}
+    if "D" in classes:
+        res.outcome = "CANNOT_DETERMINE"
+        res.outcome_reason = ("produced with unsupported values marked as gaps "
+                              "after repeated refusals; the engineer must resolve "
+                              "them before signing")
+    elif "C" in classes:
+        res.outcome = "INTERPRETED"
+        res.outcome_reason = "contains interpretation an engineer must confirm"
+    else:
+        res.outcome = "ESTABLISHED"
+    return res
+
+
+def _cells_text(rows: list[Any]) -> str:
+    """Every cell of a table, as one line per row, for the provenance check."""
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append("; ".join(f"{k}: {v}" for k, v in r.items()))
+        elif isinstance(r, (list, tuple)):
+            out.append("; ".join(str(v) for v in r))
+        else:
+            out.append(str(r))
+    return "\n".join(out)
 
 
 class ApprovalNoteTool(Tool):
@@ -185,10 +221,10 @@ class ApprovalNoteTool(Tool):
         ctx.note("deliverable", f"Generated {art['name']}",
                  f"evidence classes: {merged['A']} source, {merged['B']} derived, "
                  f"{merged['C']} interpretation, {merged['D']} unsupported", art)
-        return ToolResult(True, content={**art, "provenance_counts": merged},
-                          display=f"created {art['name']} "
-                                  f"({art['bytes']} bytes, sha256 "
-                                  f"{art['sha256'][:12]})")
+        return _deliverable(ToolResult(
+            True, content={**art, "provenance_counts": merged},
+            display=f"created {art['name']} ({art['bytes']} bytes, sha256 "
+                    f"{art['sha256'][:12]})"), verdicts)
 
 
 class ReportTool(Tool):
@@ -221,7 +257,8 @@ class ReportTool(Tool):
             str(args.get("title", "Report")), sections,
             subtitle=str(args.get("subtitle", "")), task_id=ctx.task_id)
         ctx.note("deliverable", f"Generated {art['name']}", "", art)
-        return ToolResult(True, content=art, display=f"created {art['name']}")
+        return _deliverable(ToolResult(True, content=art,
+                                       display=f"created {art['name']}"), verdicts)
 
 
 class SpreadsheetTool(Tool):
@@ -240,6 +277,7 @@ class SpreadsheetTool(Tool):
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         title = str(args.get("title", "Workbook"))
+        verdicts: list[dict[str, Any]] = []
         if args.get("calculations"):
             calcs = task_calculations(ctx.task_id)
             if not calcs:
@@ -252,10 +290,19 @@ class SpreadsheetTool(Tool):
             if not rows:
                 return ToolResult(False, error="supply 'rows', or set "
                                                "'calculations' to true")
+            # A table is a deliverable like any other. Without this check a
+            # number refused in an approval note could be put in a workbook
+            # instead and leave the appliance unchallenged.
+            _, rep = _check(_cells_text(rows), ctx)
+            verdicts = rep["verdicts"]
+            refusal = _enforce_provenance(verdicts, ctx, kind="spreadsheet")
+            if refusal is not None:
+                return refusal
             art = xlsx_builder.build_table(title, rows, args.get("columns"),
                                            task_id=ctx.task_id)
         ctx.note("deliverable", f"Generated {art['name']}", "", art)
-        return ToolResult(True, content=art, display=f"created {art['name']}")
+        return _deliverable(ToolResult(True, content=art,
+                                       display=f"created {art['name']}"), verdicts)
 
 
 class PresentationTool(Tool):
@@ -289,4 +336,5 @@ class PresentationTool(Tool):
                                       subtitle=str(args.get("subtitle", "")),
                                       task_id=ctx.task_id)
         ctx.note("deliverable", f"Generated {art['name']}", "", art)
-        return ToolResult(True, content=art, display=f"created {art['name']}")
+        return _deliverable(ToolResult(True, content=art,
+                                       display=f"created {art['name']}"), verdicts)
