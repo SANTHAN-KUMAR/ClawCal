@@ -210,6 +210,39 @@ def node_load() -> dict[str, Any]:
             "slots": limit, "saturated": busy >= limit, "why": why}
 
 
+def pin_model(cls: Any) -> Any:
+    """The router's choice for a plan, among models this host can load now.
+
+    A pin holds for the whole plan and /v1 never falls back mid-plan, so a pin
+    the host cannot load refuses every call until the client gives up. Take
+    the router's choice; if memory would refuse it, ask again without it, and
+    say why. When nothing fits, the first choice stands: its calls wait on
+    memory rather than being silently refused a model.
+    """
+    from .gateway import gateway
+    from .gateway.registry import registry
+    from .runtime.residency import residency
+    excluded: dict[str, str] = {}
+    first = None
+    for _ in range(len(registry.all())):
+        dec = router.select_model(cls, resident=residency.resident_names(),
+                                  budget_for=residency.context_budget_tokens,
+                                  exclude=set(excluded))
+        first = first or dec
+        card = registry.get(dec.model) if dec.model else None
+        if card is None:
+            break
+        ok, why = gateway.could_load(card)
+        if ok:
+            if excluded:
+                dec.reason = ("; ".join(f"{m} passed over: {w}"
+                                        for m, w in excluded.items())
+                              + f". {dec.reason}")
+            return dec
+        excluded[card.name] = why
+    return first
+
+
 # ------------------------------------------------------------------ /admit
 
 def admit(principal: Any, device: Any, *, prompt: str,
@@ -224,8 +257,6 @@ def admit(principal: Any, device: Any, *, prompt: str,
     whether the loop ran on the node or on a laptop.
     """
     from .control import decisions, sessions, trust
-    from .runtime.residency import residency
-    from .router import select_model
     sweep_abandoned()
 
     prompt = (prompt or "").strip()
@@ -251,8 +282,7 @@ def admit(principal: Any, device: Any, *, prompt: str,
 
     model, model_reason, routing = "", "", {}
     if pl.placement in ("node", "split"):
-        dec = select_model(cls, resident=residency.resident_names(),
-                           budget_for=residency.context_budget_tokens)
+        dec = pin_model(cls)
         routing = dec.to_dict()
         if not dec.model:
             pl = Placement(pl.spec_class, "refused", dec.reason)

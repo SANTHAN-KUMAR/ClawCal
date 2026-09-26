@@ -118,6 +118,11 @@ def test_degenerate_vlm_output_is_not_a_transcription():
     assert ocr.degenerate("The image is too blurry to read the text.")
     loop = "ITEM 1 PRICE 100 " * 60
     assert "repeats" in (ocr.degenerate(loop) or "")
+    # measured: granite3.2-vision-2b on IR-2026-0731 page 1, under memory pressure
+    assert "described" in (ocr.degenerate(
+        "The text in the image appears to be a technical document or report, "
+        "possibly related to marine engineering or shipbuilding.") or "")
+    assert ocr.degenerate("The vessel V-204 was inspected; nominal 12.0 mm.") is None
     real = ("ATT. GEN. ADMIN. OFFICE Fax: (614) 466-5087 Dec 10 '98 17:46 "
             "Attorney General Betty D. Montgomery. FAX COVER SHEET. DATE: "
             "December 10, 1998. TO: George Baroody. FROM: Carol Nelson.") * 2

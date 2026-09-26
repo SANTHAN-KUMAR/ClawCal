@@ -69,10 +69,7 @@ def resolve_model(requested: str, session_id: str | None, principal: str,
             if t and t.get("selected_model"):
                 return t["selected_model"], f"pinned at admission for {t['id']}"
         from . import router
-        from .runtime.residency import residency
-        cls = router.classify("general conversation")
-        dec = router.select_model(cls, resident=residency.resident_names(),
-                                  budget_for=residency.context_budget_tokens)
+        dec = placement.pin_model(router.classify("general conversation"))
         if not dec.model:
             raise InferenceError(503, f"no model available: {dec.reason}",
                                  "service_unavailable")

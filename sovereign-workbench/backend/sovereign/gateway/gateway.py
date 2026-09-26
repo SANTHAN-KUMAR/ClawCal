@@ -254,6 +254,31 @@ class ModelGateway:
         self._invalidate_resident()
         return self.memory_check(card, ctx_tokens)
 
+    def could_load(self, card: ModelCard,
+                   ctx_tokens: int | None = None) -> tuple[bool, str]:
+        """Would make_room succeed now? Evicts nothing and audits nothing.
+
+        Admission pins a model for a whole plan; pinning one this host cannot
+        load (qwen3-8b with 4 GB free while qwen3-4b fits) left every call on
+        the plan refused until the harness gave up. Admission asks this first.
+        """
+        from .. import hardware
+        names = {m.get("model") or m.get("name") for m in self.resident()}
+        if card.name in names or card.backend_ref in names:
+            return True, "already resident"
+        if card.backend != "ollama":
+            return True, "memory is managed by the external backend"
+        with self._lock:
+            idle = [m for m in self.resident()
+                    if not self._inflight.get(m.get("model") or m.get("name"), 0)]
+        snap = hardware.snapshot()
+        vram_free = max(0.0, snap["usable_vram_mb"] - snap["gpu"].get("used_mb", 0.0))
+        ok, why, _, _ = hardware.memory_verdict(
+            card, vram_free + sum(m.get("vram_mb", 0.0) or 0.0 for m in idle), snap,
+            freed_ram_mb=sum(m.get("cpu_mb", 0.0) or 0.0 for m in idle),
+            ctx_tokens=ctx_tokens)
+        return ok, why
+
     def memory_check(self, card: ModelCard,
                      ctx_tokens: int | None = None) -> tuple[bool, str]:
         """Last gate before weights load: will this fit in host memory now?

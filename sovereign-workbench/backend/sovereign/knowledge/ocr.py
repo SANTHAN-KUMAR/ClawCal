@@ -91,6 +91,15 @@ _REFUSAL_PHRASES = re.compile(
     r"(?:legible|readable|clear\s+enough)|illegible\s+(?:image|page|document))\b",
     re.I)
 
+# A small reader asked to transcribe sometimes *describes* instead: "The text in
+# the image appears to be a technical document ... It includes details about".
+# That is prose about the page, not the page, and none of its numbers are real.
+_DESCRIPTION = re.compile(
+    r"^(?:the|this)\s+(?:text\s+in\s+the\s+|provided\s+|attached\s+)?"
+    r"(?:image|picture|photo(?:graph)?|page|document|scan)\s+"
+    r"(?:appears\s+to|seems\s+to|shows|depicts|contains|is\s+(?:a|an)\b|"
+    r"features|displays|presents|consists)", re.I)
+
 
 def degenerate(text: str) -> str | None:
     """Why a VLM reading is not a transcription, or None.
@@ -109,6 +118,8 @@ def degenerate(text: str) -> str | None:
         return "the model echoed its instructions instead of reading the image"
     if _REFUSAL_PHRASES.search(head) and len(t) < 600:
         return "the model said it could not read the image"
+    if _DESCRIPTION.search(head):
+        return "the model described the image instead of transcribing it"
     toks = re.findall(r"\S+", t.lower())
     if len(toks) >= 40:
         grams = [" ".join(toks[i:i + 4]) for i in range(len(toks) - 3)]

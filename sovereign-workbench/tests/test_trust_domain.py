@@ -1252,3 +1252,39 @@ def test_trustctl_runs_against_the_node(capsys):
     assert '"grades"' in capsys.readouterr().out
     mod.main(["health"])
     assert "bundle store" in capsys.readouterr().out
+
+
+class TestPinFitsTheHost:
+    """A plan's pin holds for every call, so it must be a model the host can
+    load now: pinning qwen3-8b with 4 GB free while qwen3-4b fits left the
+    harness retrying refused calls until it timed out."""
+
+    def _router(self, monkeypatch, order):
+        from sovereign import router
+        from sovereign.gateway.registry import registry
+
+        def select(cls, *, resident=None, budget_for=None, exclude=None, **_):
+            left = [m for m in order if m not in (exclude or set())]
+            return router.RoutingDecision(
+                model=left[0] if left else "", backend="ollama", score=1.0,
+                capability_fit=1.0, residency_penalty=0.0, latency_estimate_s=0.0,
+                resident_reuse=False, reason="best fit" if left else "nothing left")
+        monkeypatch.setattr(router, "select_model", select)
+        cards = {m: type("Card", (), {"name": m})() for m in order}
+        monkeypatch.setattr(registry, "get", lambda n: cards.get(n))
+        monkeypatch.setattr(registry, "all", lambda *a, **k: list(cards.values()))
+
+    def test_passes_over_a_model_memory_would_refuse(self, monkeypatch):
+        from sovereign.gateway import gateway
+        self._router(monkeypatch, ["qwen3-8b", "qwen3-4b"])
+        monkeypatch.setattr(gateway, "could_load", lambda c, *a: (
+            (False, "only 4027 MB available") if c.name == "qwen3-8b" else (True, "")))
+        dec = placement.pin_model(object())
+        assert dec.model == "qwen3-4b"
+        assert "qwen3-8b passed over: only 4027 MB available" in dec.reason
+
+    def test_keeps_the_first_choice_when_nothing_fits(self, monkeypatch):
+        from sovereign.gateway import gateway
+        self._router(monkeypatch, ["qwen3-8b", "qwen3-4b"])
+        monkeypatch.setattr(gateway, "could_load", lambda c, *a: (False, "no room"))
+        assert placement.pin_model(object()).model == "qwen3-8b"
